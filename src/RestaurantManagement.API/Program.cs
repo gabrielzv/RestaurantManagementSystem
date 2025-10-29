@@ -7,11 +7,23 @@ var builder = WebApplication.CreateBuilder(args);
 // Add services to the container.
 builder.Services.AddControllers();
 
-// Add DbContext
+// Add DbContext with support for both SQL Server and SQLite
+var connectionString = builder.Configuration.GetConnectionString("DefaultConnection");
+var useSqlite = builder.Configuration.GetValue<bool>("UseSqlite");
+
 builder.Services.AddDbContext<ApplicationDbContext>(options =>
-    options.UseSqlServer(
-        builder.Configuration.GetConnectionString("DefaultConnection"),
-        b => b.MigrationsAssembly(typeof(ApplicationDbContext).Assembly.FullName)));
+{
+    if (useSqlite)
+    {
+        options.UseSqlite(connectionString ?? "Data Source=restaurant.db",
+            b => b.MigrationsAssembly(typeof(ApplicationDbContext).Assembly.FullName));
+    }
+    else
+    {
+        options.UseSqlServer(connectionString,
+            b => b.MigrationsAssembly(typeof(ApplicationDbContext).Assembly.FullName));
+    }
+});
 
 builder.Services.AddScoped<IApplicationDbContext>(provider => 
     provider.GetRequiredService<ApplicationDbContext>());
@@ -34,6 +46,13 @@ builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 
 var app = builder.Build();
+
+// Auto-migrate database on startup
+using (var scope = app.Services.CreateScope())
+{
+    var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+    db.Database.Migrate();
+}
 
 // Configure the HTTP request pipeline.
 if (app.Environment.IsDevelopment())

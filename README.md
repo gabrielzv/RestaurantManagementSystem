@@ -17,7 +17,7 @@ This project is built using **Clean Architecture** principles with the following
 - **.NET 9.0** - Latest .NET framework
 - **ASP.NET Core Web API** - RESTful API framework
 - **Entity Framework Core** - ORM for database access
-- **SQL Server** - Database
+- **SQL Server / SQLite** - Database (SQLite by default for easy setup)
 - **Swagger/OpenAPI** - API documentation and testing
 
 ### Frontend
@@ -32,7 +32,7 @@ This project is built using **Clean Architecture** principles with the following
 
 - [.NET 9.0 SDK](https://dotnet.microsoft.com/download/dotnet/9.0)
 - [Node.js 20+](https://nodejs.org/)
-- [SQL Server](https://www.microsoft.com/en-us/sql-server/sql-server-downloads) or SQL Server LocalDB
+- (Optional) [SQL Server](https://www.microsoft.com/en-us/sql-server/sql-server-downloads) - SQLite is used by default
 
 ## Getting Started
 
@@ -50,15 +50,32 @@ cd RestaurantManagementSystem
 dotnet restore
 ```
 
-#### Update Database Connection String
+#### Database Configuration
 
-Edit `src/RestaurantManagement.API/appsettings.json` and update the connection string if needed:
+The application is configured to use **SQLite** by default for easy setup and portability. The database file `restaurant.db` will be created automatically in the API project directory.
+
+**To use SQLite (default):**
+
+The default `appsettings.json` is already configured:
+```json
+{
+  "ConnectionStrings": {
+    "DefaultConnection": "Data Source=restaurant.db"
+  },
+  "UseSqlite": true
+}
+```
+
+**To use SQL Server instead:**
+
+Edit `src/RestaurantManagement.API/appsettings.json`:
 
 ```json
 {
   "ConnectionStrings": {
     "DefaultConnection": "Server=(localdb)\\mssqllocaldb;Database=RestaurantManagementDb;Trusted_Connection=true;MultipleActiveResultSets=true"
-  }
+  },
+  "UseSqlite": false
 }
 ```
 
@@ -72,13 +89,9 @@ For SQL Server with credentials:
 Server=localhost;Database=RestaurantManagementDb;User Id=your_user;Password=your_password;MultipleActiveResultSets=true
 ```
 
-#### Create Database Migration
+#### Database Migration
 
-```bash
-cd src/RestaurantManagement.API
-dotnet ef migrations add InitialCreate --project ../RestaurantManagement.Infrastructure
-dotnet ef database update
-```
+The database will be created and migrated automatically when you run the application. No manual migration steps are required!
 
 #### Run Backend
 
