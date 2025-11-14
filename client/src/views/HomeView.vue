@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { menuItemService, type MenuItem } from '@/services/api'
+import { getRestaurantById } from '@/services/restaurantsService'
 
 const menuItems = ref<MenuItem[]>([])
 const loading = ref(true)
@@ -21,6 +22,28 @@ const loadMenuItems = async () => {
 
 onMounted(() => {
   loadMenuItems()
+  // load session restaurant info if available
+  const session = localStorage.getItem('access_session')
+  if (session) {
+    try {
+      const s = JSON.parse(session)
+      if (s && s.restaurantId) {
+        getRestaurantById(s.restaurantId).then(r => {
+          if (r && r.name) {
+            // show a simple welcome message
+            const banner = document.createElement('div')
+            banner.style.padding = '1rem'
+            banner.style.backgroundColor = '#f5f5f5'
+            banner.style.borderRadius = '6px'
+            banner.style.marginBottom = '1rem'
+            banner.innerText = `Restaurant: ${r.name}`
+            const container = document.querySelector('.container')
+            container && container.prepend(banner)
+          }
+        }).catch(() => {})
+      }
+    } catch {}
+  }
 })
 </script>
 
