@@ -18,7 +18,7 @@ public class WaitersController : ControllerBase
         _context = context;
     }
 
-    private async Task EnsureTableExistsAsync()
+    internal async Task EnsureTableExistsAsync()
     {
         // Create table with PasswordHash column if not exists
         var sql = @"CREATE TABLE IF NOT EXISTS Waiters (
@@ -57,7 +57,7 @@ public class WaitersController : ControllerBase
         }
     }
 
-    private async Task EnsureAuthTablesAsync()
+    internal async Task EnsureAuthTablesAsync()
     {
         var sql = @"CREATE TABLE IF NOT EXISTS AccessTokens (
             Id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -222,7 +222,7 @@ public class WaitersController : ControllerBase
     }
 
     // Password hashing helpers and token generation
-    private static string HashPassword(string password)
+    internal static string HashPassword(string password)
     {
         // PBKDF2 with SHA256
         const int saltSize = 16;
@@ -242,7 +242,7 @@ public class WaitersController : ControllerBase
         return $"{iterations}.{Convert.ToBase64String(salt)}.{Convert.ToBase64String(subkey)}";
     }
 
-    private static bool VerifyPassword(string password, string storedHash)
+    internal static bool VerifyPassword(string password, string storedHash)
     {
         try
         {
@@ -263,7 +263,7 @@ public class WaitersController : ControllerBase
         }
     }
 
-    private static string GenerateToken()
+    internal static string GenerateToken()
     {
         var tokenBytes = new byte[32];
         using (var rng = RandomNumberGenerator.Create())

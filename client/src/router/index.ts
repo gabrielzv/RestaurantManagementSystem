@@ -3,6 +3,7 @@ import HomeView from '../views/HomeView.vue'
 import CodeEntry from '../views/CodeEntry.vue'
 import WaiterLogin from '../views/WaiterLogin.vue'
 import WaiterPanel from '../views/WaiterPanel.vue'
+import WaiterTable from '../views/WaiterTable.vue'
 
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
@@ -26,6 +27,11 @@ const router = createRouter({
       path: '/waiter/panel',
       name: 'waiter-panel',
       component: WaiterPanel,
+    },
+    {
+      path: '/waiter/table/:tableNumber/:waiterId',
+      name: 'waiter-table',
+      component: WaiterTable,
     },
     {
       path: '/about',

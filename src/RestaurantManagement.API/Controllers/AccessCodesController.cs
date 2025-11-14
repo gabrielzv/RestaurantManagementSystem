@@ -16,7 +16,7 @@ public class AccessCodesController : ControllerBase
         _context = context;
     }
 
-    private async Task EnsureTableExistsAsync()
+    internal async Task EnsureTableExistsAsync()
     {
         var sql = @"CREATE TABLE IF NOT EXISTS AccessCodes (
             Id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -26,10 +26,36 @@ public class AccessCodesController : ControllerBase
             WaiterId INTEGER,
             CreatedAt TEXT NOT NULL,
             ExpiresAt TEXT,
+            UsedAt TEXT,
             IsActive INTEGER NOT NULL DEFAULT 1
         );";
 
         await _context.Database.ExecuteSqlRawAsync(sql);
+
+        // Ensure column UsedAt exists (for older DBs)
+        var checkUsedAtSql = "PRAGMA table_info(AccessCodes);";
+        using var connUsedAt = _context.Database.GetDbConnection();
+        await connUsedAt.OpenAsync();
+        using var cmdUsedAt = connUsedAt.CreateCommand();
+        cmdUsedAt.CommandText = checkUsedAtSql;
+        using var readerUsedAt = await cmdUsedAt.ExecuteReaderAsync();
+        var hasUsedAt = false;
+        while (await readerUsedAt.ReadAsync())
+        {
+            var colName = readerUsedAt.IsDBNull(1) ? null : readerUsedAt.GetString(1);
+            if (string.Equals(colName, "UsedAt", StringComparison.OrdinalIgnoreCase))
+            {
+                hasUsedAt = true;
+                break;
+            }
+        }
+
+        if (!hasUsedAt)
+        {
+            using var alterUsedAt = connUsedAt.CreateCommand();
+            alterUsedAt.CommandText = "ALTER TABLE AccessCodes ADD COLUMN UsedAt TEXT;";
+            await alterUsedAt.ExecuteNonQueryAsync();
+        }
     }
 
     private static string Generate4DigitCode()
@@ -97,7 +123,7 @@ public class AccessCodesController : ControllerBase
         await EnsureTableExistsAsync();
 
         var now = DateTime.UtcNow;
-        var query = @"SELECT Id, Code, RestaurantId, TableNumber, WaiterId, CreatedAt, ExpiresAt, IsActive
+        var query = @"SELECT Id, Code, RestaurantId, TableNumber, WaiterId, CreatedAt, ExpiresAt, UsedAt, IsActive
                       FROM AccessCodes
                       WHERE Code = $code AND IsActive = 1
                       LIMIT 1;";
@@ -133,11 +159,58 @@ public class AccessCodesController : ControllerBase
                 WaiterId = reader.IsDBNull(4) ? (int?)null : reader.GetInt32(4),
                 CreatedAt = reader.GetString(5),
                 ExpiresAt = reader.IsDBNull(6) ? (string?)null : reader.GetString(6),
-                IsActive = reader.GetInt32(7) == 1
+                UsedAt = reader.IsDBNull(7) ? (string?)null : reader.GetString(7),
+                IsActive = reader.GetInt32(8) == 1
             };
+
+            // Mark as used
+            using var updateCmd = conn.CreateCommand();
+            updateCmd.CommandText = "UPDATE AccessCodes SET UsedAt = $usedAt WHERE Id = $id;";
+            var up = updateCmd.CreateParameter(); up.ParameterName = "$usedAt"; up.Value = DateTimeOffset.UtcNow.ToString("o"); updateCmd.Parameters.Add(up);
+            up = updateCmd.CreateParameter(); up.ParameterName = "$id"; up.Value = result.Id; updateCmd.Parameters.Add(up);
+            await updateCmd.ExecuteNonQueryAsync();
 
             return Ok(result);
         }
+    }
+
+    [HttpGet("bywaiter/{waiterId}")]
+    public async Task<IActionResult> GetByWaiter(int waiterId)
+    {
+        await EnsureTableExistsAsync();
+        var sql = "SELECT Id, Code, RestaurantId, TableNumber, CreatedAt, ExpiresAt, UsedAt, IsActive FROM AccessCodes WHERE WaiterId = $waiterId ORDER BY Id DESC;";
+        using var conn = _context.Database.GetDbConnection();
+        await conn.OpenAsync();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = sql;
+        var p = cmd.CreateParameter(); p.ParameterName = "$waiterId"; p.Value = waiterId; cmd.Parameters.Add(p);
+
+        using var reader = await cmd.ExecuteReaderAsync();
+        var list = new List<object>();
+        while (await reader.ReadAsync())
+        {
+            list.Add(new
+            {
+                Id = reader.GetInt32(0),
+                Code = reader.GetString(1),
+                RestaurantId = reader.GetInt32(2),
+                TableNumber = reader.IsDBNull(3) ? null : reader.GetString(3),
+                CreatedAt = reader.GetString(4),
+                ExpiresAt = reader.IsDBNull(5) ? (string?)null : reader.GetString(5),
+                UsedAt = reader.IsDBNull(6) ? (string?)null : reader.GetString(6),
+                IsActive = reader.GetInt32(7) == 1
+            });
+        }
+
+        return Ok(list);
+    }
+
+    public class CreateCodeRequest
+    {
+        public int RestaurantId { get; set; }
+        public string? TableNumber { get; set; }
+        public int? WaiterId { get; set; }
+        public int? TtlMinutes { get; set; }
     }
 
     private async Task<bool> CodeExistsAsync(string code)
@@ -151,13 +224,5 @@ public class AccessCodesController : ControllerBase
         var res = await cmd.ExecuteScalarAsync();
         if (res == null || res == DBNull.Value) return false;
         return Convert.ToInt32(res) > 0;
-    }
-
-    public class CreateCodeRequest
-    {
-        public int RestaurantId { get; set; }
-        public string? TableNumber { get; set; }
-        public int? WaiterId { get; set; }
-        public int? TtlMinutes { get; set; }
     }
 }

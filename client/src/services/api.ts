@@ -17,10 +17,10 @@ api.interceptors.request.use((cfg) => {
       const obj = JSON.parse(s)
       const token = (obj && (obj.token || obj.Token)) as string | undefined
       if (token) {
-        ;(cfg.headers as any)['Authorization'] = `Bearer ${token}`
+        cfg.headers.Authorization = `Bearer ${token}`
       }
     }
-  } catch (e) {
+  } catch {
     // ignore
   }
   return cfg

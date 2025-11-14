@@ -1,39 +1,53 @@
 <script setup lang="ts">
-import { ref } from 'vue'
-import { useRouter } from 'vue-router'
-import { loginWaiter } from '@/services/waitersService'
+import { ref } from "vue";
+import { useRouter } from "vue-router";
+import { loginWaiter } from "@/services/waitersService";
 
-const restaurantId = ref<number | null>(null)
-const name = ref('')
-const password = ref('')
-const error = ref('')
-const loading = ref(false)
-const router = useRouter()
+const restaurantId = ref<number | null>(null);
+const name = ref("");
+const password = ref("");
+const error = ref("");
+const loading = ref(false);
+const router = useRouter();
 
 const submit = async () => {
-  error.value = ''
+  error.value = "";
   if (!restaurantId.value || !name.value) {
-    error.value = 'RestaurantId y Nombre son requeridos'
-    return
+    error.value = "RestaurantId y Nombre son requeridos";
+    return;
   }
 
-  loading.value = true
+  loading.value = true;
   try {
-    const data = await loginWaiter({ restaurantId: restaurantId.value, name: name.value, password: password.value })
+    const data = await loginWaiter({
+      restaurantId: restaurantId.value,
+      name: name.value,
+      password: password.value,
+    });
     // store waiter session
-    localStorage.setItem('waiter_session', JSON.stringify({ token: data.token || data.Token, waiterId: data.id || data.Id, restaurantId: data.restaurantId || data.RestaurantId, name: data.name || data.Name, expiresAt: data.expiresAt || data.ExpiresAt }))
-    router.push({ name: 'waiter-panel' })
-  } catch (err: any) {
-    if (err.response && err.response.status === 401) {
-      error.value = 'Credenciales inválidas'
+    localStorage.setItem(
+      "waiter_session",
+      JSON.stringify({
+        token: data.token || data.Token,
+        waiterId: data.id || data.Id,
+        restaurantId: data.restaurantId || data.RestaurantId,
+        name: data.name || data.Name,
+        expiresAt: data.expiresAt || data.ExpiresAt,
+      }),
+    );
+    router.push({ name: "waiter-panel" });
+  } catch (err: unknown) {
+    const axiosError = err as { response?: { status?: number } };
+    if (axiosError.response && axiosError.response.status === 401) {
+      error.value = "Credenciales inválidas";
     } else {
-      error.value = 'Error al iniciar sesión'
-      console.error(err)
+      error.value = "Error al iniciar sesión";
+      console.error(err);
     }
   } finally {
-    loading.value = false
+    loading.value = false;
   }
-}
+};
 </script>
 
 <template>

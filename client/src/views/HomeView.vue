@@ -38,7 +38,9 @@ onMounted(() => {
             banner.style.marginBottom = '1rem'
             banner.innerText = `Restaurant: ${r.name}`
             const container = document.querySelector('.container')
-            container && container.prepend(banner)
+            if (container) {
+              container.prepend(banner)
+            }
           }
         }).catch(() => {})
       }
