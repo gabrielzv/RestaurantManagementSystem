@@ -1,0 +1,15 @@
+{
+  "ceviche-de-corvina": "/images/menu/ceviche-de-corvina.jpg",
+  "tacos-de-carnitas": "/images/menu/tacos-de-carnitas.webp",
+  "nachos-supremos": "/images/menu/nachos-supremos.jpg",
+  "casado-de-la-casa": "/images/menu/casado-de-la-casa.webp",
+  "pechuga-a-la-mostaza": "/images/menu/pechuga-a-la-mostaza.jpg",
+  "pasta-primavera": "/images/menu/pasta-primavera.webp",
+  "tres-leches": "/images/menu/tres-leches.jpg",
+  "volcan-de-chocolate": "/images/menu/volcan-de-chocolate.webp",
+  "flan-de-coco": "/images/menu/flan-de-coco.jpg",
+  "refresco-de-cas": "/images/menu/refresco-de-cas.png",
+  "limonada-fresca": "/images/menu/limonada-fresca.jpg",
+  "batido-de-fresa": "/images/menu/batido-de-fresa.jpg",
+  "default": "/images/menu/placeholder.svg"
+}
