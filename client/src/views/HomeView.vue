@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted, computed } from "vue";
 import { menuItemService, type MenuItem } from "@/services/api";
+import HeroCarousel from "@/components/HeroCarousel.vue";
 
 const menuItems = ref<MenuItem[]>([]);
 const loading = ref(true);
@@ -46,7 +47,7 @@ const loadMenuItems = async () => {
       }
       return item;
     });
-    
+
     /* Normalize category names to standard categories */
     const normalizeCategory = (c: string | undefined) => {
       if (!c) return null;
@@ -107,38 +108,32 @@ const filteredItems = computed(() => {
 
 <template>
   <main>
+    <HeroCarousel />
     <div class="container page">
-      <section class="hero">
-        <div>
-          <h2>Nuestro Menú</h2>
-          <p class="lead">Descubre platos deliciosos seleccionados para todos los gustos.</p>
+      <div class="categories">
+        <div class="category-list">
+          <button
+            v-for="cat in categories"
+            :key="cat"
+            :class="['category-btn', { active: selectedCategory === cat }]"
+            @click="selectedCategory = cat"
+          >
+            {{ cat }}
+          </button>
         </div>
+      </div>
 
-        <div class="categories">
-          <div class="category-list">
-            <button
-              v-for="cat in categories"
-              :key="cat"
-              :class="['category-btn', { active: selectedCategory === cat }]"
-              @click="selectedCategory = cat"
-            >
-              {{ cat }}
-            </button>
-          </div>
-        </div>
-      </section>
-
-      <div v-if="loading" class="loading">Loading...</div>
+      <div v-if="loading" class="loading">Cargando...</div>
 
       <div v-else-if="error" class="error">
         {{ error }}
       </div>
 
       <div v-else-if="menuItems.length === 0" class="empty">
-        No menu items found. Start by adding some items via the API.
+        No se encontraron elementos en el menú.
       </div>
 
-      <transition-group name="list" tag="div" v-else class="menu-grid">
+      <transition-group name="list" tag="div" v-else class="menu-grid" id="menu">
         <div v-for="item in filteredItems" :key="item.id" class="menu-item">
           <div class="thumb-wrap">
             <img
@@ -198,12 +193,15 @@ const filteredItems = computed(() => {
             <h3>{{ item.name }}</h3>
             <p class="desc">{{ item.description }}</p>
             <div class="meta">
-              <p
-                class="status"
+              <button
+                class="status add"
                 :class="{ available: item.isAvailable, unavailable: !item.isAvailable }"
+                type="button"
+                aria-label="Agregar"
+                title="Agregar"
               >
-                {{ item.isAvailable ? "Disponible" : "No disponible" }}
-              </p>
+                Agregar
+              </button>
               <span class="price">₡{{ item.price.toFixed(2) }}</span>
             </div>
           </div>
@@ -240,6 +238,7 @@ const filteredItems = computed(() => {
 .categories {
   width: 100%;
   margin-top: 0.75rem;
+  margin-bottom: 1.25rem;
 }
 .category-list {
   display: flex;
@@ -247,7 +246,7 @@ const filteredItems = computed(() => {
   flex-wrap: wrap;
 }
 .category-btn {
-  border: 1px solid var(--color-border);
+  border: 1px solid var(--color-accent);
   background: transparent;
   padding: 0.4rem 0.75rem;
   border-radius: 999px;
@@ -263,7 +262,7 @@ const filteredItems = computed(() => {
   transition: background-color 200ms ease, transform 150ms ease, border-color 200ms ease;
 }
 .category-btn:hover {
-  border-color: var(--color-accent-2);
+  border-color: var(--color-accent);
   transform: translateY(-2px);
 }
 
@@ -389,7 +388,7 @@ const filteredItems = computed(() => {
 }
 .price {
   font-weight: 700;
-  color: var(--color-accent-2);
+  color: var(--color-accent);
 }
 
 /* Transition styles for list items */

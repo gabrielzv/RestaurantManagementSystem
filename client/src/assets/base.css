@@ -36,20 +36,20 @@
   --section-gap: 160px;
 }
 
-/* New surface colors for the new restaurant theme */
+/* Restaurant theme variables */
 :root {
-  /* page background (lighter) */
-  --color-background: #ffffff;
-  --color-background-soft: #ffffff;
-  --color-background-mute: #fff8f3;
+  /* page background */
+  --color-background: var(--vt-c-white);
+  --color-background-soft: var(--vt-c-white-soft);
+  --color-background-mute: var(--vt-c-white-mute);
 
   /* accents */
   --color-accent: #ff7a18;
-  --color-accent-2: #00a3a3;
+  --color-accent-2: #ff9447;
 
   /* header / footer surfaces */
-  --color-header-start: #00a3a3;
-  --color-header-end: #007b7b;
+  --color-header-start: #0f3b3b;
+  --color-header-end: #083c3c;
   --color-footer-header-bg: #102027;
   --color-footer-text: #ffffff;
 

@@ -29,7 +29,7 @@ a,
 
   #app {
     display: block;
-    padding: 0 2rem;
+    padding: 0rem;
   }
 }
 
@@ -38,8 +38,8 @@ a,
 }
 
 /* Responsive padding for small screens */
-@media (max-width: 720px) {
+@media (max-width: 770px) {
   #app {
-    padding: 1rem;
+    padding: 0rem;
   }
 }

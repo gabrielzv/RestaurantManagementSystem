@@ -52,7 +52,9 @@ const navOpen = ref(false);
 .site-header {
   background: var(--color-footer-header-bg);
   border-bottom: 1px solid rgba(255, 255, 255, 0.06);
-  color: white;
+  color: var(--color-footer-text);
+  position: relative;
+  z-index: 40;
 }
 
 /* Header and footer backgrounds with full width */
@@ -86,7 +88,7 @@ const navOpen = ref(false);
 .brand .tag {
   margin-top: 0.15rem;
   font-size: 1rem;
-  color: white;
+  color: var(--color-footer-text);
 }
 
 .site-nav {
@@ -119,20 +121,23 @@ const navOpen = ref(false);
   text-decoration: none;
   background: transparent;
   color: rgba(255, 255, 255, 0.95);
+  border-color: var(--color-accent);
+  border-radius: 999px;
+  border: 1px solid var(--color-accent);
 }
 
 .site-nav a.router-link-exact-active {
-  background-color: var(--color-background-mute);
+  background-color: var(--color-accent);
 }
 
 .site-nav a:hover {
-  background-color: var(--color-accent-2);
+  background-color: var(--color-accent);
   color: white;
 }
 
 main {
   min-height: calc(100vh - 160px);
-  padding: 1.5rem 0;
+  padding: 0 0 1.5rem;
 }
 
 .site-footer {
@@ -155,7 +160,7 @@ main {
 
 .muted {
   font-size: 0.85rem;
-  color: var(--color-footer-text);
+  color: var(--color-accent);
   opacity: 0.85;
 }
 
@@ -165,6 +170,7 @@ main {
     flex-direction: column;
     align-items: flex-start;
   }
+  
   .site-nav {
     width: 100%;
     justify-content: flex-start;
