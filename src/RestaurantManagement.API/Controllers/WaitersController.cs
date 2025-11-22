@@ -24,36 +24,50 @@ public class WaitersController : ControllerBase
         var sql = @"CREATE TABLE IF NOT EXISTS Waiters (
             Id INTEGER PRIMARY KEY AUTOINCREMENT,
             RestaurantId INTEGER NOT NULL,
-            Name TEXT NOT NULL,
-            PasswordHash TEXT,
+            Username TEXT NOT NULL,
+            PasswordHash TEXT NOT NULL,
             CreatedAt TEXT NOT NULL DEFAULT (datetime('now'))
         );";
 
         await _context.Database.ExecuteSqlRawAsync(sql);
 
-        // Ensure column PasswordHash exists (for older DBs)
+        // Ensure column Username exists (for older DBs)
         var checkSql = "PRAGMA table_info(Waiters);";
         using var conn = _context.Database.GetDbConnection();
         await conn.OpenAsync();
         using var cmd = conn.CreateCommand();
         cmd.CommandText = checkSql;
         using var reader = await cmd.ExecuteReaderAsync();
+        var hasUsername = false;
         var hasPasswordHash = false;
         while (await reader.ReadAsync())
         {
             var colName = reader.IsDBNull(1) ? null : reader.GetString(1);
+            if (string.Equals(colName, "Username", StringComparison.OrdinalIgnoreCase))
+            {
+                hasUsername = true;
+            }
             if (string.Equals(colName, "PasswordHash", StringComparison.OrdinalIgnoreCase))
             {
                 hasPasswordHash = true;
-                break;
             }
         }
 
-        if (!hasPasswordHash)
+        // If old Name column exists, rename it to Username
+        if (!hasUsername && hasPasswordHash)
         {
             using var alterCmd = conn.CreateCommand();
-            alterCmd.CommandText = "ALTER TABLE Waiters ADD COLUMN PasswordHash TEXT;";
+            alterCmd.CommandText = "ALTER TABLE Waiters RENAME COLUMN Name TO Username;";
             await alterCmd.ExecuteNonQueryAsync();
+        }
+
+        // Ensure PasswordHash is NOT NULL
+        if (hasPasswordHash)
+        {
+            // Update any NULL PasswordHash values with a default hash
+            using var updateCmd = conn.CreateCommand();
+            updateCmd.CommandText = "UPDATE Waiters SET PasswordHash = 'AQAAAAEAACcQAAAAEBLjouNqAeNrMZtq7hSxgGF2dFMHkq3R8zYQH8Q2dQkJ5QK8qQ==' WHERE PasswordHash IS NULL;";
+            await updateCmd.ExecuteNonQueryAsync();
         }
     }
 
@@ -71,23 +85,21 @@ public class WaitersController : ControllerBase
     [HttpPost]
     public async Task<IActionResult> CreateWaiter([FromBody] CreateWaiterRequest req)
     {
-        if (req.RestaurantId <= 0 || string.IsNullOrWhiteSpace(req.Name))
-            return BadRequest("RestaurantId and Name are required");
+        if (req.RestaurantId <= 0 || string.IsNullOrWhiteSpace(req.Username) || string.IsNullOrWhiteSpace(req.Password))
+            return BadRequest("RestaurantId, Username and Password are required");
 
         await EnsureTableExistsAsync();
 
-        var insertSql = "INSERT INTO Waiters (RestaurantId, Name, PasswordHash, CreatedAt) VALUES ($restaurantId, $name, $passwordHash, $createdAt);";
-        var passwordHash = (string?)null;
-        if (!string.IsNullOrEmpty(req.Password))
-            passwordHash = HashPassword(req.Password);
+        var insertSql = "INSERT INTO Waiters (RestaurantId, Username, PasswordHash, CreatedAt) VALUES ($restaurantId, $username, $passwordHash, $createdAt);";
+        var passwordHash = HashPassword(req.Password);
 
         using var conn = _context.Database.GetDbConnection();
         await conn.OpenAsync();
         using var cmd = conn.CreateCommand();
         cmd.CommandText = insertSql;
         var p = cmd.CreateParameter(); p.ParameterName = "$restaurantId"; p.Value = req.RestaurantId; cmd.Parameters.Add(p);
-        p = cmd.CreateParameter(); p.ParameterName = "$name"; p.Value = req.Name; cmd.Parameters.Add(p);
-        p = cmd.CreateParameter(); p.ParameterName = "$passwordHash"; p.Value = (object?)passwordHash ?? DBNull.Value; cmd.Parameters.Add(p);
+        p = cmd.CreateParameter(); p.ParameterName = "$username"; p.Value = req.Username; cmd.Parameters.Add(p);
+        p = cmd.CreateParameter(); p.ParameterName = "$passwordHash"; p.Value = passwordHash; cmd.Parameters.Add(p);
         p = cmd.CreateParameter(); p.ParameterName = "$createdAt"; p.Value = DateTime.UtcNow.ToString("o"); cmd.Parameters.Add(p);
 
         await cmd.ExecuteNonQueryAsync();
@@ -98,7 +110,7 @@ public class WaitersController : ControllerBase
     public async Task<IActionResult> GetByRestaurant(int restaurantId)
     {
         await EnsureTableExistsAsync();
-        var sql = "SELECT Id, Name, CreatedAt FROM Waiters WHERE RestaurantId = $restaurantId ORDER BY Id;";
+        var sql = "SELECT Id, Username, CreatedAt FROM Waiters WHERE RestaurantId = $restaurantId ORDER BY Id;";
         using var conn = _context.Database.GetDbConnection();
         await conn.OpenAsync();
         using var cmd = conn.CreateCommand();
@@ -112,7 +124,7 @@ public class WaitersController : ControllerBase
             list.Add(new
             {
                 Id = reader.GetInt32(0),
-                Name = reader.IsDBNull(1) ? null : reader.GetString(1),
+                Username = reader.IsDBNull(1) ? null : reader.GetString(1),
                 CreatedAt = reader.IsDBNull(2) ? null : reader.GetString(2)
             });
         }
@@ -123,39 +135,39 @@ public class WaitersController : ControllerBase
     [HttpPost("login")]
     public async Task<IActionResult> Login([FromBody] LoginRequest req)
     {
-        if (req.RestaurantId <= 0 || string.IsNullOrWhiteSpace(req.Name))
-            return BadRequest("RestaurantId and Name are required");
+        if (string.IsNullOrWhiteSpace(req.Username) || string.IsNullOrWhiteSpace(req.Password))
+            return BadRequest("Username and Password are required");
 
         await EnsureTableExistsAsync();
-        // Try to find existing waiter and validate password if present
-        var findSql = "SELECT Id, Name, CreatedAt, PasswordHash FROM Waiters WHERE RestaurantId = $restaurantId AND Name = $name LIMIT 1;";
+        // Try to find existing waiter and validate password
+        var findSql = "SELECT Id, Username, RestaurantId, CreatedAt, PasswordHash FROM Waiters WHERE Username = $username LIMIT 1;";
         using var conn = _context.Database.GetDbConnection();
         await conn.OpenAsync();
         int existingId = -1;
+        int restaurantId = -1;
         string? existingPwdHash = null;
+        string? existingUsername = null;
 
         using (var cmd = conn.CreateCommand())
         {
             cmd.CommandText = findSql;
-            var p = cmd.CreateParameter(); p.ParameterName = "$restaurantId"; p.Value = req.RestaurantId; cmd.Parameters.Add(p);
-            p = cmd.CreateParameter(); p.ParameterName = "$name"; p.Value = req.Name; cmd.Parameters.Add(p);
+            var p = cmd.CreateParameter(); p.ParameterName = "$username"; p.Value = req.Username; cmd.Parameters.Add(p);
 
             using var reader = await cmd.ExecuteReaderAsync();
             if (await reader.ReadAsync())
             {
                 existingId = reader.GetInt32(0);
-                existingPwdHash = reader.IsDBNull(3) ? null : reader.GetString(3);
+                existingUsername = reader.IsDBNull(1) ? null : reader.GetString(1);
+                restaurantId = reader.GetInt32(2);
+                existingPwdHash = reader.IsDBNull(4) ? null : reader.GetString(4);
             }
         }
 
         if (existingId != -1)
         {
-            // If password is set on account, require it
-            if (!string.IsNullOrEmpty(existingPwdHash))
-            {
-                if (string.IsNullOrEmpty(req.Password) || !VerifyPassword(req.Password, existingPwdHash))
-                    return Unauthorized("Invalid password");
-            }
+            // Validate password (required)
+            if (string.IsNullOrEmpty(existingPwdHash) || !VerifyPassword(req.Password, existingPwdHash))
+                return Unauthorized("Invalid username or password");
 
             // create auth token
             await EnsureAuthTablesAsync();
@@ -168,57 +180,25 @@ public class WaitersController : ControllerBase
             tp = insertToken.CreateParameter(); tp.ParameterName = "$expiresAt"; tp.Value = expiresAt.ToString("o"); insertToken.Parameters.Add(tp);
             await insertToken.ExecuteNonQueryAsync();
 
-            var result = new { Id = existingId, Name = req.Name, RestaurantId = req.RestaurantId, Token = token, ExpiresAt = expiresAt };
+            var result = new { Id = existingId, Username = existingUsername, RestaurantId = restaurantId, Token = token, ExpiresAt = expiresAt };
             return Ok(result);
         }
 
-        // Not found -> create and return (store password if provided)
-        var insertSql = "INSERT INTO Waiters (RestaurantId, Name, PasswordHash, CreatedAt) VALUES ($restaurantId, $name, $passwordHash, $createdAt);";
-        var pwdHash = string.IsNullOrEmpty(req.Password) ? null : HashPassword(req.Password);
-        using (var cmd2 = conn.CreateCommand())
-        {
-            cmd2.CommandText = insertSql;
-            var p = cmd2.CreateParameter(); p.ParameterName = "$restaurantId"; p.Value = req.RestaurantId; cmd2.Parameters.Add(p);
-            p = cmd2.CreateParameter(); p.ParameterName = "$name"; p.Value = req.Name; cmd2.Parameters.Add(p);
-            p = cmd2.CreateParameter(); p.ParameterName = "$passwordHash"; p.Value = (object?)pwdHash ?? DBNull.Value; cmd2.Parameters.Add(p);
-            p = cmd2.CreateParameter(); p.ParameterName = "$createdAt"; p.Value = DateTime.UtcNow.ToString("o"); cmd2.Parameters.Add(p);
-
-            await cmd2.ExecuteNonQueryAsync();
-        }
-
-        // get last inserted id
-        using var cmd3 = conn.CreateCommand();
-        cmd3.CommandText = "SELECT last_insert_rowid();";
-        var idObj = await cmd3.ExecuteScalarAsync();
-        var newId = Convert.ToInt32(idObj);
-
-        // create token
-        await EnsureAuthTablesAsync();
-        var newToken = GenerateToken();
-        var newExpires = DateTime.UtcNow.AddHours(12);
-        using var insertToken2 = conn.CreateCommand();
-        insertToken2.CommandText = "INSERT INTO AccessTokens (Token, WaiterId, ExpiresAt) VALUES ($token, $waiterId, $expiresAt);";
-        var t1 = insertToken2.CreateParameter(); t1.ParameterName = "$token"; t1.Value = newToken; insertToken2.Parameters.Add(t1);
-        t1 = insertToken2.CreateParameter(); t1.ParameterName = "$waiterId"; t1.Value = newId; insertToken2.Parameters.Add(t1);
-        t1 = insertToken2.CreateParameter(); t1.ParameterName = "$expiresAt"; t1.Value = newExpires.ToString("o"); insertToken2.Parameters.Add(t1);
-        await insertToken2.ExecuteNonQueryAsync();
-
-        var result2 = new { Id = newId, Name = req.Name, RestaurantId = req.RestaurantId, Token = newToken, ExpiresAt = newExpires };
-        return Ok(result2);
+        // User not found
+        return Unauthorized("Invalid username or password");
     }
 
     public class CreateWaiterRequest
     {
         public int RestaurantId { get; set; }
-        public string Name { get; set; } = string.Empty;
-        public string? Password { get; set; }
+        public string Username { get; set; } = string.Empty;
+        public string Password { get; set; } = string.Empty;
     }
 
     public class LoginRequest
     {
-        public int RestaurantId { get; set; }
-        public string Name { get; set; } = string.Empty;
-        public string? Password { get; set; }
+        public string Username { get; set; } = string.Empty;
+        public string Password { get; set; } = string.Empty;
     }
 
     // Password hashing helpers and token generation

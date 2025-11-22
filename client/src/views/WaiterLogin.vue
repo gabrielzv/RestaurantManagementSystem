@@ -3,8 +3,7 @@ import { ref } from "vue";
 import { useRouter } from "vue-router";
 import { loginWaiter } from "@/services/waitersService";
 
-const restaurantId = ref<number | null>(null);
-const name = ref("");
+const username = ref("");
 const password = ref("");
 const error = ref("");
 const loading = ref(false);
@@ -12,16 +11,15 @@ const router = useRouter();
 
 const submit = async () => {
   error.value = "";
-  if (!restaurantId.value || !name.value) {
-    error.value = "RestaurantId y Nombre son requeridos";
+  if (!username.value || !password.value) {
+    error.value = "Usuario y Contraseña son requeridos";
     return;
   }
 
   loading.value = true;
   try {
     const data = await loginWaiter({
-      restaurantId: restaurantId.value,
-      name: name.value,
+      username: username.value,
       password: password.value,
     });
     // store waiter session
@@ -31,7 +29,7 @@ const submit = async () => {
         token: data.token || data.Token,
         waiterId: data.id || data.Id,
         restaurantId: data.restaurantId || data.RestaurantId,
-        name: data.name || data.Name,
+        username: data.username || data.Username,
         expiresAt: data.expiresAt || data.ExpiresAt,
       }),
     );
@@ -51,19 +49,23 @@ const submit = async () => {
 </script>
 
 <template>
-  <main>
-    <div class="center">
+  <main class="center">
+    <div class="login-card">
       <h1>Ingreso Mesero</h1>
 
-      <input v-model.number="restaurantId" placeholder="RestaurantId" type="number" />
-      <input v-model="name" placeholder="Nombre" />
-      <input v-model="password" placeholder="Contraseña (opcional)" type="password" />
+      <div class="input-group">
+        <input v-model="username" placeholder="Usuario" />
+      </div>        <div class="input-group">
+          <input v-model="password" placeholder="Contraseña" type="password" />
+        </div>
 
-      <div class="actions">
-        <button @click="submit" :disabled="loading">Entrar</button>
-      </div>
+        <div class="actions">
+          <button @click="submit" :disabled="loading">
+            {{ loading ? "Ingresando..." : "Entrar" }}
+          </button>
+        </div>
 
-      <p class="error" v-if="error">{{ error }}</p>
+        <p class="error" v-if="error">{{ error }}</p>
     </div>
   </main>
 </template>
@@ -71,26 +73,77 @@ const submit = async () => {
 <style scoped>
 .center {
   display: flex;
-  flex-direction: column;
-  align-items: center;
   justify-content: center;
-  height: 80vh;
+  align-items: center;
+  min-height: 100vh;
+  padding: 2rem;
+}
+
+.login-card {
+  background: white;
+  padding: 2rem;
+  border-radius: 8px;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+  width: 100%;
+  max-width: 400px;
+}
+
+h1 {
+  text-align: center;
+  margin-bottom: 1.5rem;
+  color: #333;
+}
+
+.input-group {
+  margin-bottom: 1rem;
 }
 
 input {
+  width: 100%;
+  padding: 0.75rem;
+  border: 1px solid #ddd;
+  border-radius: 4px;
   font-size: 1rem;
-  padding: 0.5rem;
-  margin: 0.5rem 0;
-  width: 16rem;
+  box-sizing: border-box;
 }
 
-.actions button {
-  padding: 0.5rem 1rem;
+input:focus {
+  outline: none;
+  border-color: #007bff;
+}
+
+.actions {
+  margin-top: 1.5rem;
+  text-align: center;
+}
+
+button {
+  background: #007bff;
+  color: white;
+  border: none;
+  padding: 0.75rem 2rem;
+  border-radius: 4px;
   font-size: 1rem;
+  cursor: pointer;
+  width: 100%;
+}
+
+button:hover:not(:disabled) {
+  background: #0056b3;
+}
+
+button:disabled {
+  background: #ccc;
+  cursor: not-allowed;
 }
 
 .error {
-  color: #d32f2f;
+  color: #dc3545;
   margin-top: 1rem;
+  text-align: center;
+  background: #f8d7da;
+  padding: 0.5rem;
+  border-radius: 4px;
+  border: 1px solid #f5c6cb;
 }
 </style>

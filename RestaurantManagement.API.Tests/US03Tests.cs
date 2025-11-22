@@ -39,7 +39,12 @@ public class US03Tests : IDisposable
         await controller.EnsureTableExistsAsync();
         await controller.EnsureAuthTablesAsync();
 
-        var request = new WaitersController.LoginRequest { RestaurantId = 1, Name = "Test", Password = "pass" };
+        // First create a waiter
+        var createRequest = new WaitersController.CreateWaiterRequest { RestaurantId = 1, Username = "Test", Password = "pass" };
+        await controller.CreateWaiter(createRequest);
+
+        // Now login
+        var request = new WaitersController.LoginRequest { Username = "Test", Password = "pass" };
 
         // Act
         var result = await controller.Login(request);

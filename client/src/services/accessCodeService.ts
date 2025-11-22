@@ -17,6 +17,11 @@ export async function validateAccessCode(code: string) {
   return resp.data;
 }
 
+export async function clearAccessCode(code: string) {
+  const resp = await api.delete(`/accesscodes/clear/${encodeURIComponent(code)}`);
+  return resp.data;
+}
+
 export async function getAccessCodesByWaiter(waiterId: number) {
   const resp = await api.get(`/accesscodes/bywaiter/${waiterId}`);
   return resp.data;

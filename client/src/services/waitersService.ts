@@ -2,14 +2,13 @@ import { api } from "./api";
 
 export interface CreateWaiterRequest {
   restaurantId: number;
-  name: string;
-  password?: string;
+  username: string;
+  password: string;
 }
 
 export interface LoginRequest {
-  restaurantId: number;
-  name: string;
-  password?: string;
+  username: string;
+  password: string;
 }
 
 export async function createWaiter(req: CreateWaiterRequest) {

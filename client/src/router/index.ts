@@ -29,7 +29,7 @@ const router = createRouter({
       component: WaiterPanel,
     },
     {
-      path: '/waiter/table/:tableNumber/:waiterId',
+      path: '/waiter/table/:tableNumber/:waiterId/:code',
       name: 'waiter-table',
       component: WaiterTable,
     },

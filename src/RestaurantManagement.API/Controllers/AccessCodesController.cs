@@ -205,6 +205,28 @@ public class AccessCodesController : ControllerBase
         return Ok(list);
     }
 
+    [HttpDelete("clear/{code}")]
+    public async Task<IActionResult> ClearCode(string code)
+    {
+        if (string.IsNullOrWhiteSpace(code))
+            return BadRequest("Code is required");
+
+        await EnsureTableExistsAsync();
+
+        var sql = "DELETE FROM AccessCodes WHERE Code = $code;";
+        using var conn = _context.Database.GetDbConnection();
+        await conn.OpenAsync();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = sql;
+        var p = cmd.CreateParameter(); p.ParameterName = "$code"; p.Value = code; cmd.Parameters.Add(p);
+
+        var rowsAffected = await cmd.ExecuteNonQueryAsync();
+        if (rowsAffected == 0)
+            return NotFound("Code not found");
+
+        return Ok(new { Message = "Code deleted successfully" });
+    }
+
     public class CreateCodeRequest
     {
         public int RestaurantId { get; set; }

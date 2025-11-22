@@ -1,9 +1,18 @@
 <script setup lang="ts">
 import { RouterLink, RouterView } from 'vue-router'
+import { useRoute } from 'vue-router'
+import { computed } from 'vue'
+
+const route = useRoute()
+
+// Hide navigation on waiter routes
+const showNavigation = computed(() => {
+  return !route.path.startsWith('/waiter')
+})
 </script>
 
 <template>
-  <header>
+  <header v-if="showNavigation">
     <div class="wrapper">
       <h1>Restaurant Management System</h1>
       <nav>
