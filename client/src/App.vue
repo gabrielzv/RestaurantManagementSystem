@@ -1,15 +1,70 @@
 <script setup lang="ts">
-import { ref } from "vue";
-import { RouterLink, RouterView } from "vue-router";
+import { ref, computed, onMounted, onBeforeUnmount } from "vue";
+import { RouterLink, RouterView, useRoute, type RouteMeta } from "vue-router";
 
 const navOpen = ref(false);
+const route = useRoute();
+
+// Use route meta to hide header/footer when needed (not in the login or code access view)
+const hideLayout = computed(() => {
+  try {
+    return !!(route.meta as RouteMeta)?.hideLayout;
+  } catch {
+    return false;
+  }
+});
+const showHeader = computed(() => !hideLayout.value);
+const showFooter = computed(() => !hideLayout.value);
+
+// Restaurant name shown in header/footer. Read from localStorage if available. Sabor Original is default.
+const restaurantName = ref<string>("Sabor Original");
+
+const updateRestaurantNameFromStorage = () => {
+  try {
+    const name = localStorage.getItem("restaurant_name");
+    if (name && name.trim().length > 0) restaurantName.value = name;
+    else restaurantName.value = "Sabor Original";
+  } catch {
+    restaurantName.value = "Sabor Original";
+  }
+};
+
+// On component mount, read restaurant name from localStorage and set up event listeners
+onMounted(() => {
+  updateRestaurantNameFromStorage();
+
+  // Listen for custom event dispatched by HomeView when name is set in the same window
+  const onNameChanged = (e: Event) => {
+    try {
+      const custom = e as CustomEvent<string>;
+      if (custom && custom.detail) restaurantName.value = custom.detail;
+      else updateRestaurantNameFromStorage();
+    } catch {
+      updateRestaurantNameFromStorage();
+    }
+  };
+
+  window.addEventListener("restaurant-name-changed", onNameChanged as EventListener);
+
+  // Also listen for storage events so other tabs/windows update
+  const onStorage = (e: StorageEvent) => {
+    if (e.key === "restaurant_name") updateRestaurantNameFromStorage();
+  };
+  window.addEventListener("storage", onStorage);
+
+  // cleanup
+  onBeforeUnmount(() => {
+    window.removeEventListener("restaurant-name-changed", onNameChanged as EventListener);
+    window.removeEventListener("storage", onStorage);
+  });
+});
 </script>
 
 <template>
-  <header class="site-header">
+  <header class="site-header" v-if="showHeader">
     <div class="container">
       <div class="brand">
-        <h1>Sabor Original</h1>
+        <h1>{{ restaurantName }}</h1>
         <p class="tag">
           La esencia de una buena comida en cada plato. Sabores tradicionales y extranjeros que te
           harán sentir en casa.
@@ -38,11 +93,11 @@ const navOpen = ref(false);
     <RouterView />
   </main>
 
-  <footer class="site-footer">
+  <footer class="site-footer" v-if="showFooter">
     <div class="container footer-inner">
       <div>
-        <strong>Sabor Tico Restaurante</strong>
-        <div class="small muted">© 2024 EGR & GZV. Todos los derechos reservados.</div>
+        <strong>{{ restaurantName }}</strong>
+        <div class="small muted">© 2025 EGR & GZV. Todos los derechos reservados.</div>
       </div>
     </div>
   </footer>
@@ -170,7 +225,7 @@ main {
     flex-direction: column;
     align-items: flex-start;
   }
-  
+
   .site-nav {
     width: 100%;
     justify-content: flex-start;

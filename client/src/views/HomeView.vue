@@ -1,9 +1,17 @@
 <script setup lang="ts">
-import { ref, onMounted, computed } from "vue";
+import { ref, onMounted, onUnmounted, computed } from "vue";
+import { useRouter } from "vue-router";
 import { menuItemService, type MenuItem } from "@/services/api";
 import HeroCarousel from "@/components/HeroCarousel.vue";
+import { getRestaurantById } from "@/services/restaurantsService";
+import { validateAccessCode } from "@/services/accessCodeService";
 
-const menuItems = ref<MenuItem[]>([]);
+const router = useRouter();
+
+// Type extending MenuItem to include optional image property (In DB there is no image field)
+type MenuItemWithImage = MenuItem & { image?: string };
+
+const menuItems = ref<MenuItemWithImage[]>([]);
 const loading = ref(true);
 const error = ref("");
 const selectedCategory = ref("Todo el menú");
@@ -15,7 +23,22 @@ const loadMenuItems = async () => {
   try {
     loading.value = true;
     error.value = "";
-    menuItems.value = await menuItemService.getAll();
+
+    // If we have a session with restaurantId, load only that restaurant's menu items
+    let sessionRestaurantId: number | null = null;
+    try {
+      const session = localStorage.getItem("access_session");
+      if (session) {
+        const s = JSON.parse(session);
+        if (s && s.restaurantId) sessionRestaurantId = Number(s.restaurantId);
+      }
+    } catch {}
+
+    if (sessionRestaurantId) {
+      menuItems.value = await menuItemService.getByRestaurant(sessionRestaurantId);
+    } else {
+      menuItems.value = await menuItemService.getAll();
+    }
 
     /* Load image map */
     let imageMap: Record<string, string> = {};
@@ -40,7 +63,7 @@ const loadMenuItems = async () => {
 
     /* Assign images to menu items */
     menuItems.value = menuItems.value.map((it, idx) => {
-      const item = it as any;
+      const item = it as MenuItemWithImage;
       if (!item.image) {
         const slug = toSlug(item.name ?? String(item.id ?? "item" + idx));
         item.image = imageMap[slug] || `/images/menu/${slug}.svg` || "/images/menu/placeholder.svg";
@@ -75,7 +98,7 @@ const loadMenuItems = async () => {
 
     /* Assign normalized or guessed categories to menu items */
     menuItems.value = menuItems.value.map((it) => {
-      const item = it as any;
+      const item = it as MenuItemWithImage;
       const normalized = normalizeCategory(item.category);
       item.category = normalized || guessCategory(item.name);
       return item;
@@ -88,20 +111,107 @@ const loadMenuItems = async () => {
   }
 };
 
-/* Load menu items on component mount */
+// Check if access code is still valid
+const checkAccessCode = async () => {
+  const session = localStorage.getItem("access_session");
+  if (session) {
+    try {
+      const s = JSON.parse(session);
+      if (s && s.code) {
+        // Try to validate the code again
+        await validateAccessCode(s.code);
+      }
+    } catch {
+      // Code no longer valid, clear session and redirect
+      localStorage.removeItem("access_session");
+      try {
+        localStorage.removeItem("restaurant_name");
+        window.dispatchEvent(new CustomEvent("restaurant-name-changed", { detail: null }));
+      } catch {}
+      alert("Su mesa ha sido desocupada. Por favor ingrese un nuevo código.");
+      router.push({ name: "code" });
+    }
+  }
+};
+
+let checkInterval: number | undefined;
+
 onMounted(() => {
   loadMenuItems();
+  // Check access code validity
+  checkAccessCode();
+  // Poll every 5 seconds to check if code still exists
+  checkInterval = window.setInterval(checkAccessCode, 5000);
+
+  // load session restaurant info if available
+  const session = localStorage.getItem("access_session");
+  if (session) {
+    try {
+      const s = JSON.parse(session);
+      if (s && s.restaurantId) {
+        getRestaurantById(s.restaurantId)
+          .then((r) => {
+            if (r && r.name) {
+              // persist restaurant name for other parts of the app
+              try {
+                localStorage.setItem("restaurant_name", r.name);
+              } catch {}
+
+                // notify other parts of the app in this window that the restaurant name changed
+                try {
+                  window.dispatchEvent(new CustomEvent("restaurant-name-changed", { detail: r.name }));
+                } catch {}
+
+              // remove any legacy inline banner injected previously
+              try {
+                const container = document.querySelector(".container");
+                if (container) {
+                  const children = Array.from(container.children);
+                  for (const ch of children) {
+                    const txt = (ch.textContent || "").trim();
+                    if (txt.startsWith("Restaurant:") || txt.startsWith("Restaurant: ")) {
+                      ch.remove();
+                    }
+                  }
+                }
+              } catch {}
+
+              // Update header brand title so it shows restaurant name
+              try {
+                const headerTitle = document.querySelector("header .brand h1");
+                if (headerTitle) headerTitle.textContent = r.name;
+              } catch {}
+            }
+          })
+          .catch(() => {
+            try {
+              localStorage.removeItem("restaurant_name");
+            } catch {}
+          });
+      }
+    } catch {}
+  } else {
+    try {
+      localStorage.removeItem("restaurant_name");
+      // also restore default brand title if present
+      const headerTitle = document.querySelector("header .brand h1");
+      if (headerTitle) headerTitle.textContent = "Sabor Original";
+    } catch {}
+  }
+});
+
+onUnmounted(() => {
+  if (checkInterval) window.clearInterval(checkInterval);
 });
 
 /* Computed filtered items based on selected category */
 const filteredItems = computed(() => {
   if (selectedCategory.value === "Todo el menú") return menuItems.value;
-  return menuItems.value.filter((it) => {
-    const cat = (it as any).category || "";
-    return (
-      cat.toLowerCase() === selectedCategory.value.toLowerCase() ||
-      cat.toLowerCase().includes(selectedCategory.value.toLowerCase())
-    );
+  return menuItems.value.filter((it: MenuItemWithImage) => {
+    const cat = it.category || "";
+    const lowerCat = cat.toLowerCase();
+    const sel = selectedCategory.value.toLowerCase();
+    return lowerCat === sel || lowerCat.includes(sel);
   });
 });
 </script>

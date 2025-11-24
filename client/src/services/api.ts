@@ -9,6 +9,23 @@ export const api = axios.create({
   }
 })
 
+// Attach waiter token automatically when present
+api.interceptors.request.use((cfg) => {
+  try {
+    const s = localStorage.getItem('waiter_session')
+    if (s) {
+      const obj = JSON.parse(s)
+      const token = (obj && (obj.token || obj.Token)) as string | undefined
+      if (token) {
+        cfg.headers.Authorization = `Bearer ${token}`
+      }
+    }
+  } catch {
+    // ignore
+  }
+  return cfg
+})
+
 export interface MenuItem {
   id?: number
   name: string
@@ -23,6 +40,11 @@ export interface MenuItem {
 export const menuItemService = {
   async getAll(): Promise<MenuItem[]> {
     const response = await api.get<MenuItem[]>('/menuitems')
+    return response.data
+  },
+
+  async getByRestaurant(restaurantId: number): Promise<MenuItem[]> {
+    const response = await api.get<MenuItem[]>(`/restaurants/${restaurantId}/menuitems`)
     return response.data
   },
 
