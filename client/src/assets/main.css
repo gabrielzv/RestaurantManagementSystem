@@ -1,9 +1,9 @@
-@import './base.css';
+@import "./base.css";
 
 #app {
   max-width: 1280px;
   margin: 0 auto;
-  padding: 2rem;
+  padding: 2rem 1rem;
   font-weight: normal;
 }
 
@@ -22,14 +22,24 @@ a,
 }
 
 @media (min-width: 1024px) {
+  /* Use a single centered column for the app at large widths */
   body {
-    display: flex;
-    place-items: center;
+    margin: 0;
   }
 
   #app {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    padding: 0 2rem;
+    display: block;
+    padding: 0rem;
+  }
+}
+
+.small {
+  font-size: 0.85rem;
+}
+
+/* Responsive padding for small screens */
+@media (max-width: 770px) {
+  #app {
+    padding: 0rem;
   }
 }

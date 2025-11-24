@@ -43,6 +43,11 @@ export const menuItemService = {
     return response.data
   },
 
+  async getByRestaurant(restaurantId: number): Promise<MenuItem[]> {
+    const response = await api.get<MenuItem[]>(`/restaurants/${restaurantId}/menuitems`)
+    return response.data
+  },
+
   async getById(id: number): Promise<MenuItem> {
     const response = await api.get<MenuItem>(`/menuitems/${id}`)
     return response.data

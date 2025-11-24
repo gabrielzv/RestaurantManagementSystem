@@ -14,6 +14,7 @@ This project is built using **Clean Architecture** principles with the following
 ## Tech Stack
 
 ### Backend
+
 - **.NET 9.0** - Latest .NET framework
 - **ASP.NET Core Web API** - RESTful API framework
 - **Entity Framework Core** - ORM for database access
@@ -21,6 +22,7 @@ This project is built using **Clean Architecture** principles with the following
 - **Swagger/OpenAPI** - API documentation and testing
 
 ### Frontend
+
 - **Vue 3** - Progressive JavaScript framework
 - **TypeScript** - Type-safe JavaScript
 - **Vue Router** - Client-side routing
@@ -46,6 +48,7 @@ cd RestaurantManagementSystem
 ### 2. Setup Backend
 
 #### Install Dependencies
+
 ```bash
 dotnet restore
 ```
@@ -57,6 +60,7 @@ The application is configured to use **SQLite** by default for easy setup and po
 **To use SQLite (default):**
 
 The default `appsettings.json` is already configured:
+
 ```json
 {
   "ConnectionStrings": {
@@ -80,11 +84,13 @@ Edit `src/RestaurantManagement.API/appsettings.json`:
 ```
 
 For SQL Server on Windows, you can use:
+
 ```
 Server=localhost;Database=RestaurantManagementDb;Trusted_Connection=true;MultipleActiveResultSets=true
 ```
 
 For SQL Server with credentials:
+
 ```
 Server=localhost;Database=RestaurantManagementDb;User Id=your_user;Password=your_password;MultipleActiveResultSets=true
 ```
@@ -101,6 +107,7 @@ dotnet run
 ```
 
 The API will be available at:
+
 - HTTP: `http://localhost:5000`
 - HTTPS: `https://localhost:5001`
 - Swagger UI: `http://localhost:5000/swagger`
@@ -133,12 +140,14 @@ The Vue app will be available at `http://localhost:5173`
 ## Running the Full Application
 
 1. **Start the Backend** (in one terminal):
+
    ```bash
    cd src/RestaurantManagement.API
    dotnet run
    ```
 
 2. **Start the Frontend** (in another terminal):
+
    ```bash
    cd client
    npm run dev
@@ -165,10 +174,11 @@ You can test the API using:
 
 1. **Swagger UI**: Navigate to `http://localhost:5000/swagger`
 2. **curl**:
+
    ```bash
    # Get all menu items
    curl http://localhost:5000/api/menuitems
-   
+
    # Create a menu item
    curl -X POST http://localhost:5000/api/menuitems \
      -H "Content-Type: application/json" \
@@ -257,3 +267,85 @@ npm run type-check
 
 This project is licensed under the MIT License.
 
+## Database dump (SQLite) — create and restore
+
+This explains how to share a sample copy of the SQLite database (schema + data) without committing the binary .db file. Use this only for non-sensitive example data. Prefer migrations + seed for reproducible setups.
+
+1. Prepare
+
+- Stop the API if it's running:
+
+```powershell
+# from repo root
+cd src\RestaurantManagement.API
+# stop any running `dotnet run`
+```
+
+- Verify sqlite3 is installed:
+
+```powershell
+sqlite3 --version
+```
+
+If not installed, download the SQLite command-line shell: https://www.sqlite.org/download.html
+
+2. Create the dump folder (if missing)
+
+```powershell
+cd src\RestaurantManagement.API
+mkdir ..\db
+```
+
+3. Export the dump (recommended: use a backup to avoid WAL issues)
+
+```powershell
+# create a consistent backup
+sqlite3 restaurant.db ".backup backup.db"
+
+# export SQL from the backup into the repo
+sqlite3 backup.db ".dump" > ..\db\dump.sql
+
+# remove the temporary backup
+del backup.db
+```
+
+If the app is stopped and you prefer to export directly:
+
+```powershell
+sqlite3 restaurant.db ".dump" > ..\db\dump.sql
+```
+
+4. Add the dump to the repository (only if it's safe to share)
+
+```powershell
+git add src\db\dump.sql
+git commit -m "Add sqlite dump for sample data"
+git push
+```
+
+5. Restore the dump on another machine (after `git pull`)
+
+```powershell
+cd src\RestaurantManagement.API
+
+# stop the API and remove any old DB files
+del restaurant.db
+del restaurant.db-wal
+del restaurant.db-shm
+
+# recreate the DB from the dump
+sqlite3 restaurant.db < ..\db\dump.sql
+```
+
+6. Recommended alternative: migrations + seed
+   For a controlled, reproducible setup, commit EF Core migrations and seed code. After pulling changes, run:
+
+```powershell
+dotnet ef database update --project src/RestaurantManagement.Infrastructure --startup-project src/RestaurantManagement.API
+```
+
+Quick tips
+
+- Keep `*.db` in .gitignore to avoid committing binary DB files.
+- Only commit dump.sql for non-sensitive sample data.
+- Prefer migrations + seed for development environments.
