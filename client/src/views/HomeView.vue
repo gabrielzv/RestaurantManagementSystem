@@ -1,6 +1,11 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, onUnmounted } from 'vue'
+import { useRouter } from 'vue-router'
 import { menuItemService, type MenuItem } from '@/services/api'
+import { getRestaurantById } from '@/services/restaurantsService'
+import { validateAccessCode } from '@/services/accessCodeService'
+
+const router = useRouter()
 
 const menuItems = ref<MenuItem[]>([])
 const loading = ref(true)
@@ -19,8 +24,58 @@ const loadMenuItems = async () => {
   }
 }
 
+// Check if access code is still valid
+const checkAccessCode = async () => {
+  const session = localStorage.getItem('access_session')
+  if (session) {
+    try {
+      const s = JSON.parse(session)
+      if (s && s.code) {
+        // Try to validate the code again
+        await validateAccessCode(s.code)
+      }
+    } catch (err) {
+      // Code no longer valid, clear session and redirect
+      localStorage.removeItem('access_session')
+      alert('Su mesa ha sido desocupada. Por favor ingrese un nuevo código.')
+      router.push({ name: 'code' })
+    }
+  }
+}
+
 onMounted(() => {
   loadMenuItems()
+  // Check access code validity
+  checkAccessCode()
+  // Poll every 5 seconds to check if code still exists
+  const interval = setInterval(checkAccessCode, 5000)
+  // Clean up on unmount
+  onUnmounted(() => clearInterval(interval))
+  
+  // load session restaurant info if available
+  const session = localStorage.getItem('access_session')
+  if (session) {
+    try {
+      const s = JSON.parse(session)
+      if (s && s.restaurantId) {
+        getRestaurantById(s.restaurantId).then(r => {
+          if (r && r.name) {
+            // show a simple welcome message
+            const banner = document.createElement('div')
+            banner.style.padding = '1rem'
+            banner.style.backgroundColor = '#f5f5f5'
+            banner.style.borderRadius = '6px'
+            banner.style.marginBottom = '1rem'
+            banner.innerText = `Restaurant: ${r.name}`
+            const container = document.querySelector('.container')
+            if (container) {
+              container.prepend(banner)
+            }
+          }
+        }).catch(() => {})
+      }
+    } catch {}
+  }
 })
 </script>
 
