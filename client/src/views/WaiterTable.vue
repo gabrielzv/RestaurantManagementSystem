@@ -1,7 +1,11 @@
 <script setup lang="ts">
-import { ref } from "vue";
+import { ref, onMounted, onUnmounted } from "vue";
 import { useRoute, useRouter } from "vue-router";
-import { clearAccessCode } from "@/services/accessCodeService";
+import {
+  clearAccessCode,
+  getNotifications,
+  markNotificationAsRead,
+} from "@/services/accessCodeService";
 
 const route = useRoute();
 const router = useRouter();
@@ -12,16 +16,57 @@ const accessCode = ref(route.params.code as string);
 const loading = ref(false);
 const error = ref("");
 
-// Placeholder for future notifications
-const notifications = ref<string[]>([]);
+// Notifications from API
+interface Notification {
+  id: number;
+  tableNumber: string;
+  message: string;
+  createdAt: string;
+}
 
-// Simulate adding a notification (for demo)
-const addNotification = (msg: string) => {
-  notifications.value.push(msg);
+const notifications = ref<Notification[]>([]);
+
+const loadNotifications = async () => {
+  try {
+    const data = await getNotifications(accessCode.value);
+    const normalized: Notification[] = (data ?? []).map((item: any) => ({
+      id: item.id,
+      tableNumber: item.tableNumber,
+      message: item.message,
+      createdAt: item.createdAt,
+    }));
+
+    for (const notif of normalized) {
+      const exists = notifications.value.some((n) => n.id === notif.id);
+      if (!exists) {
+        notifications.value.unshift(notif);
+      }
+    }
+  } catch (err) {
+    console.error("Error loading notifications:", err);
+  }
 };
 
-// Example: add a test notification
-setTimeout(() => addNotification("Cliente pidió agua"), 2000);
+const dismissNotification = async (notif: Notification) => {
+  try {
+    await markNotificationAsRead(notif.id);
+    notifications.value = notifications.value.filter((n) => n.id !== notif.id);
+  } catch (err) {
+    console.error("Error marking notification as read:", err);
+  }
+};
+
+let notificationInterval: number | undefined;
+
+onMounted(() => {
+  loadNotifications();
+  // Poll for new notifications every 3 seconds
+  notificationInterval = window.setInterval(loadNotifications, 3000);
+});
+
+onUnmounted(() => {
+  if (notificationInterval) window.clearInterval(notificationInterval);
+});
 
 const clearTable = async () => {
   if (!accessCode.value) {
@@ -33,8 +78,8 @@ const clearTable = async () => {
   error.value = "";
   try {
     await clearAccessCode(accessCode.value);
-    addNotification("¡Mesa desocupada exitosamente! El código ha sido borrado.");
-    // Don't auto-redirect, let user see the success message and click back
+    // Navigate back to panel after clearing
+    router.push({ name: "waiter-panel" });
   } catch (err: unknown) {
     error.value = "Error al desocupar mesa";
     console.error(err);
@@ -52,30 +97,29 @@ const backToPanel = () => {
   <main class="center">
     <div class="table-card">
       <h1>Atendiendo Mesa {{ tableNumber }}</h1>
-        <p class="table-info">Mesero ID: {{ waiterId }} | Código: {{ accessCode }}</p>
+      <p class="table-info">Mesero ID: {{ waiterId }} | Código: {{ accessCode }}</p>
 
-        <div class="notifications">
-          <h3>Notificaciones</h3>
-          <ul>
-            <li
-              v-for="(notif, index) in notifications"
-              :key="index"
-              :class="{ 'success-notification': notif.includes('desocupada') }"
-            >
-              {{ notif }}
-            </li>
-          </ul>
-          <p v-if="notifications.length === 0">No hay notificaciones</p>
-        </div>
+      <div class="notifications">
+        <h3>Notificaciones</h3>
+        <ul v-if="notifications.length > 0">
+          <li v-for="notif in notifications" :key="notif.id" class="notification-item">
+            <div class="notification-content">
+              <p>{{ notif.message }}</p>
+            </div>
+            <button @click="dismissNotification(notif)" class="dismiss-btn">✓</button>
+          </li>
+        </ul>
+        <p v-else class="no-notifications">No hay notificaciones</p>
+      </div>
 
-        <div class="actions">
-          <button @click="clearTable" :disabled="loading" class="clear-btn">
-            {{ loading ? "Desocupando..." : "Desocupar Mesa" }}
-          </button>
-          <button @click="backToPanel" class="secondary">Volver al Panel</button>
-        </div>
+      <div class="actions">
+        <button @click="clearTable" :disabled="loading" class="clear-btn">
+          {{ loading ? "Desocupando..." : "Desocupar Mesa" }}
+        </button>
+        <button @click="backToPanel" class="secondary">Volver al Panel</button>
+      </div>
 
-        <p class="error" v-if="error">{{ error }}</p>
+      <p class="error" v-if="error">{{ error }}</p>
     </div>
   </main>
 </template>
@@ -129,15 +173,66 @@ h1 {
   margin: 0;
 }
 
-.notifications li {
+.notification-item {
   background: white;
-  padding: 0.5rem;
-  margin-bottom: 0.5rem;
-  border-radius: 4px;
-  border-left: 3px solid #007bff;
+  padding: 1rem;
+  margin-bottom: 0.75rem;
+  border-radius: 6px;
+  border-left: 4px solid #667eea;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  animation: slideIn 0.3s ease;
 }
 
-.notifications p {
+@keyframes slideIn {
+  from {
+    opacity: 0;
+    transform: translateX(-20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.notification-content {
+  flex: 1;
+}
+
+.notification-content p {
+  margin: 0;
+  color: #333;
+  text-align: left;
+  font-style: normal;
+  font-size: 1rem;
+  font-weight: 500;
+}
+
+.dismiss-btn {
+  background: #4caf50;
+  color: white;
+  border: none;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  cursor: pointer;
+  font-size: 1.2rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s ease;
+  flex-shrink: 0;
+  margin-left: 1rem;
+}
+
+.dismiss-btn:hover {
+  background: #45a049;
+  transform: scale(1.1);
+}
+
+.no-notifications {
   text-align: center;
   color: #666;
   font-style: italic;
