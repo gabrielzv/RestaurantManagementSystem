@@ -22,11 +22,14 @@ const submit = async () => {
       username: username.value,
       password: password.value,
     });
-    // store waiter session
+    // store waiter token for authentication
+    const token = data.token || data.Token;
+    localStorage.setItem("waiter_token", token);
+    // store waiter session data
     localStorage.setItem(
       "waiter_session",
       JSON.stringify({
-        token: data.token || data.Token,
+        token: token,
         waiterId: data.id || data.Id,
         restaurantId: data.restaurantId || data.RestaurantId,
         username: data.username || data.Username,

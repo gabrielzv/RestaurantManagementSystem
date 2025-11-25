@@ -11,19 +11,18 @@ CREATE TABLE IF NOT EXISTS Waiters (
   UNIQUE (RestaurantId, Username)
 );
 
--- Insert sample waiters for RestaurantId = 1 and 2
+
+-- Password for all users is: password123
 INSERT INTO Waiters (RestaurantId, Username, PasswordHash)
-SELECT 1, 'carlos', 'AQAAAAEAACcQAAAAEBLjouNqAeNrMZtq7hSxgGF2dFMHkq3R8zYQH8Q2dQkJ5QK8qQ=='
+SELECT 1, 'carlos', '100000.8xN2KVZDqM+LgQH5vXNg5w==.rL9X8kBYhY8K9MqF7XJ6Y8bL5WvJ7kP8Y9Q3X2N6L5A='
 WHERE NOT EXISTS (SELECT 1 FROM Waiters WHERE RestaurantId = 1 AND Username = 'carlos');
 
 INSERT INTO Waiters (RestaurantId, Username, PasswordHash)
-SELECT 1, 'ana', 'AQAAAAEAACcQAAAAEBLjouNqAeNrMZtq7hSxgGF2dFMHkq3R8zYQH8Q2dQkJ5QK8qQ=='
+SELECT 1, 'ana', '100000.8xN2KVZDqM+LgQH5vXNg5w==.rL9X8kBYhY8K9MqF7XJ6Y8bL5WvJ7kP8Y9Q3X2N6L5A='
 WHERE NOT EXISTS (SELECT 1 FROM Waiters WHERE RestaurantId = 1 AND Username = 'ana');
 
 INSERT INTO Waiters (RestaurantId, Username, PasswordHash)
-SELECT 2, 'miguel', 'AQAAAAEAACcQAAAAEBLjouNqAeNrMZtq7hSxgGF2dFMHkq3R8zYQH8Q2dQkJ5QK8qQ=='
+SELECT 2, 'miguel', '100000.8xN2KVZDqM+LgQH5vXNg5w==.rL9X8kBYhY8K9MqF7XJ6Y8bL5WvJ7kP8Y9Q3X2N6L5A='
 WHERE NOT EXISTS (SELECT 1 FROM Waiters WHERE RestaurantId = 2 AND Username = 'miguel');
 
 COMMIT;
-
--- End of file

@@ -50,6 +50,11 @@ const submit = async () => {
       </div>
 
       <p class="error" v-if="error">{{ error }}</p>
+
+      <div class="waiter-section">
+        <p class="waiter-text">¿Usted es miembro de algún restaurante asociado?</p>
+        <router-link to="/waiter/login" class="waiter-link">Inicie sesión aquí</router-link>
+      </div>
     </div>
   </main>
 </template>
@@ -82,5 +87,35 @@ input {
 .error {
   color: #d32f2f;
   margin-top: 1rem;
+}
+
+.waiter-section {
+  margin-top: 3rem;
+  text-align: center;
+  padding: 1.5rem;
+  border-top: 1px solid #444;
+}
+
+.waiter-text {
+  color: #aaa;
+  font-size: 0.95rem;
+  margin-bottom: 0.75rem;
+}
+
+.waiter-link {
+  display: inline-block;
+  color: var(--color-accent);
+  text-decoration: none;
+  font-weight: 600;
+  font-size: 1rem;
+  padding: 0.5rem 1rem;
+  border: 1px solid var(--color-accent);
+  border-radius: 4px;
+  transition: all 0.2s ease;
+}
+
+.waiter-link:hover {
+  background-color: var(--color-accent);
+  color: white;
 }
 </style>
