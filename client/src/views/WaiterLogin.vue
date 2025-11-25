@@ -58,17 +58,18 @@ const submit = async () => {
 
       <div class="input-group">
         <input v-model="username" placeholder="Usuario" />
-      </div>        <div class="input-group">
-          <input v-model="password" placeholder="Contraseña" type="password" />
-        </div>
+      </div>
+      <div class="input-group">
+        <input v-model="password" placeholder="Contraseña" type="password" />
+      </div>
 
-        <div class="actions">
-          <button @click="submit" :disabled="loading">
-            {{ loading ? "Ingresando..." : "Entrar" }}
-          </button>
-        </div>
+      <div class="actions">
+        <button @click="submit" :disabled="loading">
+          {{ loading ? "Ingresando..." : "Entrar" }}
+        </button>
+      </div>
 
-        <p class="error" v-if="error">{{ error }}</p>
+      <p class="error" v-if="error">{{ error }}</p>
     </div>
   </main>
 </template>

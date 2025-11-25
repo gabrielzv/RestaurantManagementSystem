@@ -60,38 +60,38 @@ const router = createRouter({
 // Navigation guard to protect waiter routes
 router.beforeEach((to, from, next) => {
   const isAuth = isWaiterAuthenticated();
-  
+
   // Protect all /waiter/* routes except /waiter/login
-  const isWaiterRoute = to.path.startsWith('/waiter/') && to.path !== '/waiter/login';
-  
+  const isWaiterRoute = to.path.startsWith("/waiter/") && to.path !== "/waiter/login";
+
   if ((to.meta.requiresAuth || isWaiterRoute) && !isAuth) {
     // Redirect to waiter login if not authenticated
     next({ name: "waiter-login" });
     return;
   }
-  
+
   // Additional validation for waiter-table route
-  if (to.name === 'waiter-table' && isAuth) {
+  if (to.name === "waiter-table" && isAuth) {
     try {
-      const session = localStorage.getItem('waiter_session');
+      const session = localStorage.getItem("waiter_session");
       if (session) {
         const sessionData = JSON.parse(session);
         const sessionWaiterId = sessionData.waiterId;
         const routeWaiterId = to.params.waiterId;
-        
+
         // Check if the waiterId in the URL matches the logged-in waiter
         if (sessionWaiterId && routeWaiterId && String(sessionWaiterId) !== String(routeWaiterId)) {
           // Unauthorized access attempt - redirect to panel
-          alert('No tienes permiso para acceder a esta mesa.');
+          alert("No tienes permiso para acceder a esta mesa.");
           next({ name: "waiter-panel" });
           return;
         }
       }
     } catch (e) {
-      console.error('Error validating waiter access:', e);
+      console.error("Error validating waiter access:", e);
     }
   }
-  
+
   next();
 });
 
