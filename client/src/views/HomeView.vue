@@ -4,7 +4,7 @@ import { useRouter } from "vue-router";
 import { menuItemService, type MenuItem } from "@/services/api";
 import HeroCarousel from "@/components/HeroCarousel.vue";
 import { getRestaurantById } from "@/services/restaurantsService";
-import { validateAccessCode } from "@/services/accessCodeService";
+import { validateAccessCode, notifyWaiter } from "@/services/accessCodeService";
 
 const router = useRouter();
 
@@ -15,6 +15,9 @@ const menuItems = ref<MenuItemWithImage[]>([]);
 const loading = ref(true);
 const error = ref("");
 const selectedCategory = ref("Todo el menú");
+const hasActiveSession = ref(false);
+const callingWaiter = ref(false);
+const callSuccess = ref(false);
 
 const categories = ["Todo el menú", "Entradas", "Platos fuertes", "Bebidas", "Postres"];
 
@@ -134,9 +137,36 @@ const checkAccessCode = async () => {
   }
 };
 
+const callWaiter = async () => {
+  const session = localStorage.getItem("access_session");
+  if (!session) return;
+
+  try {
+    const s = JSON.parse(session);
+    if (s && s.code) {
+      console.log("Llamando al mesero con código:", s.code);
+      callingWaiter.value = true;
+      callSuccess.value = false;
+      await notifyWaiter(s.code);
+      console.log("Notificación enviada exitosamente");
+      callSuccess.value = true;
+      setTimeout(() => {
+        callSuccess.value = false;
+      }, 3000);
+    }
+  } catch (err) {
+    console.error("Error calling waiter:", err);
+  } finally {
+    callingWaiter.value = false;
+  }
+};
+
 let checkInterval: number | undefined;
 
 onMounted(() => {
+  // Check if user has an active session
+  const session = localStorage.getItem("access_session");
+  hasActiveSession.value = !!session;
   loadMenuItems();
   // Check access code validity
   checkAccessCode();
@@ -144,7 +174,6 @@ onMounted(() => {
   checkInterval = window.setInterval(checkAccessCode, 5000);
 
   // load session restaurant info if available
-  const session = localStorage.getItem("access_session");
   if (session) {
     try {
       const s = JSON.parse(session);
@@ -157,10 +186,12 @@ onMounted(() => {
                 localStorage.setItem("restaurant_name", r.name);
               } catch {}
 
-                // notify other parts of the app in this window that the restaurant name changed
-                try {
-                  window.dispatchEvent(new CustomEvent("restaurant-name-changed", { detail: r.name }));
-                } catch {}
+              // notify other parts of the app in this window that the restaurant name changed
+              try {
+                window.dispatchEvent(
+                  new CustomEvent("restaurant-name-changed", { detail: r.name }),
+                );
+              } catch {}
 
               // remove any legacy inline banner injected previously
               try {
@@ -220,6 +251,13 @@ const filteredItems = computed(() => {
   <main>
     <HeroCarousel />
     <div class="container page">
+      <div v-if="hasActiveSession" class="call-waiter-section">
+        <button @click="callWaiter" :disabled="callingWaiter" class="call-waiter-btn">
+          <span v-if="!callingWaiter">Llamar Mesero</span>
+          <span v-else>Llamando...</span>
+        </button>
+        <p v-if="callSuccess" class="call-success">✓ Mesero notificado</p>
+      </div>
       <div class="categories">
         <div class="category-list">
           <button
@@ -328,6 +366,55 @@ const filteredItems = computed(() => {
   padding: 1rem 1.25rem;
 }
 
+.call-waiter-section {
+  text-align: center;
+  margin-bottom: 2rem;
+  padding: 1rem;
+  background: var(--color-background-soft);
+  border-radius: 8px;
+}
+
+.call-waiter-btn {
+  background: linear-gradient(135deg, #ff9800 0%, #ff5722 100%);
+  color: white;
+  border: none;
+  padding: 1rem 2rem;
+  border-radius: 999px;
+  font-size: 1.1rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  box-shadow: 0 4px 15px rgba(255, 152, 0, 0.3);
+}
+
+.call-waiter-btn:hover:not(:disabled) {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 20px rgba(255, 152, 0, 0.4);
+}
+
+.call-waiter-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.call-success {
+  color: #4caf50;
+  font-weight: 600;
+  margin-top: 0.5rem;
+  animation: fadeIn 0.3s ease;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
 .hero {
   display: flex;
   align-items: center;
@@ -369,7 +456,10 @@ const filteredItems = computed(() => {
   color: white;
 }
 .category-btn {
-  transition: background-color 200ms ease, transform 150ms ease, border-color 200ms ease;
+  transition:
+    background-color 200ms ease,
+    transform 150ms ease,
+    border-color 200ms ease;
 }
 .category-btn:hover {
   border-color: var(--color-accent);
@@ -404,7 +494,9 @@ const filteredItems = computed(() => {
   border-radius: 10px;
   background-color: var(--color-background-soft);
   box-shadow: 0 6px 18px rgba(20, 20, 20, 0.05);
-  transition: transform 0.18s ease, box-shadow 0.18s ease;
+  transition:
+    transform 0.18s ease,
+    box-shadow 0.18s ease;
   height: 100%;
 }
 
