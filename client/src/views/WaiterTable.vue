@@ -1,8 +1,12 @@
 <script setup lang="ts">
-import { ref, onMounted, onActivated, onBeforeUnmount } from "vue";
+import { ref, onMounted, onActivated, onBeforeUnmount, onUnmounted } from "vue";
 import { HubConnection, HubConnectionBuilder, LogLevel } from "@microsoft/signalr";
 import { useRoute, useRouter } from "vue-router";
-import { clearAccessCode } from "@/services/accessCodeService";
+import {
+  clearAccessCode,
+  getNotifications,
+  markNotificationAsRead,
+} from "@/services/accessCodeService";
 import { menuItemService } from "@/services/api";
 import { ordersService } from "@/services/ordersService";
 import type { OrderItemReq } from "@/services/ordersService";
@@ -17,14 +21,67 @@ const accessCode = ref(route.params.code as string);
 const loading = ref(false);
 const error = ref("");
 
-// Notifications
-const notifications = ref<string[]>([]);
-const addNotification = (msg: string) => notifications.value.push(msg);
+const sessionRaw =
+  typeof localStorage !== "undefined" ? localStorage.getItem("waiter_session") : null;
+const session = sessionRaw ? JSON.parse(sessionRaw) : null;
+const restaurantId = session?.restaurantId ?? 1;
 
-// SignalR hub connection (for waiter realtime notifications)
+// Data types
+interface MenuItem {
+  id?: number;
+  name: string;
+  description?: string;
+  price: number;
+}
+interface ClientNotification {
+  id: number;
+  tableNumber: string;
+  message: string;
+  createdAt: string;
+}
+
+const menu = ref<MenuItem[]>([]);
+const cart = ref<
+  Array<{ menuItemId?: number; name: string; price: number; quantity: number; notes?: string }>
+>([]);
+const currentOrderId = ref<number | null>(null);
+const orderStatus = ref<string | null>(null);
+
+// Notifications types
+const clientNotifications = ref<ClientNotification[]>([]);
+const orderNotifications = ref<string[]>([]);
+let notificationInterval: number | undefined;
+
+const addOrderNotification = (msg: string) => orderNotifications.value.unshift(msg);
+
+const loadClientNotifications = async () => {
+  try {
+    const data = await getNotifications(accessCode.value);
+    const normalized: ClientNotification[] = (data ?? []).map((item: any) => ({
+      id: item.id,
+      tableNumber: item.tableNumber,
+      message: item.message,
+      createdAt: item.createdAt,
+    }));
+    for (const n of normalized)
+      if (!clientNotifications.value.some((c) => c.id === n.id))
+        clientNotifications.value.unshift(n);
+  } catch (e) {
+    console.error("Error loading client notifications", e);
+  }
+};
+
+const dismissNotification = async (n: ClientNotification) => {
+  try {
+    await markNotificationAsRead(n.id);
+    clientNotifications.value = clientNotifications.value.filter((c) => c.id !== n.id);
+  } catch (e) {
+    console.error("Error dismissing notification", e);
+  }
+};
+
+// SignalR for order notifications
 let hubConnection: HubConnection | null = null;
-
-// Order status updates via SignalR
 const initHub = async () => {
   try {
     const apiBase = import.meta.env.VITE_API_URL || "http://localhost:5000/api";
@@ -34,9 +91,8 @@ const initHub = async () => {
       .withUrl(hubUrl, { withCredentials: true })
       .configureLogging(LogLevel.None)
       .build();
-
     hubConnection.on("OrderReady", async (orderId: number) => {
-      addNotification(`Pedido ${orderId} listo (SignalR).`);
+      addOrderNotification(`Pedido ${orderId} listo (SignalR).`);
       if (currentOrderId.value === orderId) {
         try {
           const data = await ordersService.getOrder(orderId);
@@ -47,7 +103,6 @@ const initHub = async () => {
         }
       }
     });
-
     await hubConnection.start();
     if (waiterId.value) {
       try {
@@ -56,12 +111,11 @@ const initHub = async () => {
         console.warn("JoinGroup failed", e);
       }
     }
-  } catch (err) {
-    console.warn("SignalR init failed", err);
+  } catch (e) {
+    console.warn("SignalR init failed", e);
   }
 };
 
-// Stop SignalR hub
 const stopHub = async () => {
   try {
     if (hubConnection) {
@@ -78,58 +132,28 @@ const stopHub = async () => {
   }
 };
 
-// Menu and cart
-interface MenuItem {
-  id?: number;
-  name: string;
-  description?: string;
-  price: number;
-}
-
-const menu = ref<MenuItem[]>([]);
-const cart = ref<
-  Array<{ menuItemId?: number; name: string; price: number; quantity: number; notes?: string }>
->([]);
-const currentOrderId = ref<number | null>(null);
-const orderStatus = ref<string | null>(null);
-
-// Session + restaurant
-const sessionRaw =
-  typeof localStorage !== "undefined" ? localStorage.getItem("waiter_session") : null;
-const session = sessionRaw ? JSON.parse(sessionRaw) : null;
-const restaurantId = session?.restaurantId ?? 1;
-
 const loadMenu = async () => {
   try {
-    // Use session restaurantId when available
     const items = await menuItemService.getByRestaurant(restaurantId);
     menu.value = items;
-  } catch (err) {
-    console.error(err);
+  } catch (e) {
+    console.error(e);
   }
 };
 
-// Cart manipulation
 const addToCart = (item: MenuItem) => {
   const id = item?.id ?? null;
   const existing = id ? cart.value.find((c) => c.menuItemId === id) : undefined;
-  if (existing) {
-    existing.quantity += 1;
-  } else {
+  if (existing) existing.quantity += 1;
+  else
     cart.value.push({
       menuItemId: id ?? undefined,
       name: item.name,
       price: item.price,
       quantity: 1,
     });
-  }
 };
-
-// Increase/decrease item quantity in cart
-const increaseItem = (item: MenuItem) => {
-  addToCart(item);
-};
-
+const increaseItem = (item: MenuItem) => addToCart(item);
 const decreaseItem = (item: MenuItem) => {
   const id = item?.id ?? null;
   if (!id) return;
@@ -140,15 +164,12 @@ const decreaseItem = (item: MenuItem) => {
   if (it.quantity > 1) it.quantity -= 1;
   else cart.value.splice(idx, 1);
 };
-
-// Get quantity of item in cart
 const getCartQty = (menuItemId: number | undefined | null) => {
   if (!menuItemId) return 0;
   const found = cart.value.find((c) => c.menuItemId === menuItemId);
   return found ? found.quantity : 0;
 };
 
-// Create order
 const createOrder = async () => {
   if (cart.value.length === 0) {
     error.value = "El pedido está vacío";
@@ -158,7 +179,7 @@ const createOrder = async () => {
   error.value = "";
   try {
     const payload = {
-      restaurantId: restaurantId,
+      restaurantId,
       waiterId: waiterId.value || undefined,
       tableNumber: tableNumber.value,
       items: cart.value.map<OrderItemReq>((c) => ({
@@ -170,9 +191,8 @@ const createOrder = async () => {
       })),
     };
     const res = await ordersService.createOrder(payload);
-    currentOrderId.value = res.id ?? res.Id ?? res.Id;
-    addNotification("Pedido creado en borrador. Puede modificar antes de confirmar.");
-    // Persist the created order so it survives a refresh
+    currentOrderId.value = res.id ?? res.Id ?? null;
+    addOrderNotification("Pedido creado en borrador. Puede modificar antes de confirmar.");
     try {
       orderSession.save(waiterId.value || undefined, tableNumber.value, {
         orderId: currentOrderId.value as number,
@@ -184,15 +204,14 @@ const createOrder = async () => {
     } catch (e) {
       console.warn("orderSession.save failed", e);
     }
-  } catch (err) {
-    console.error(err);
+  } catch (e) {
+    console.error(e);
     error.value = "Error al crear pedido";
   } finally {
     loading.value = false;
   }
 };
 
-// Confirm order
 const confirmOrder = async () => {
   if (!currentOrderId.value) {
     error.value = "No hay pedido para confirmar";
@@ -202,11 +221,9 @@ const confirmOrder = async () => {
   error.value = "";
   try {
     await ordersService.confirmOrder(currentOrderId.value);
-    addNotification("Pedido confirmado y enviado a cocina. Esperando preparación...");
+    addOrderNotification("Pedido confirmado y enviado a cocina. Esperando preparación...");
     orderStatus.value = "Sent";
-    // update persisted status
     orderSession.updateStatus(waiterId.value || undefined, tableNumber.value, "Sent");
-    // Poll for status until Ready
     const poll = setInterval(async () => {
       try {
         const data = await ordersService.getOrder(currentOrderId.value!);
@@ -217,8 +234,7 @@ const confirmOrder = async () => {
           data.Order?.status ??
           data.Order?.Status;
         const normalized = st ?? data.Order?.Status ?? data.order?.Status;
-        orderStatus.value = normalized;
-        // update persisted status each poll
+        orderStatus.value = normalized as string | null;
         orderSession.updateStatus(
           waiterId.value || undefined,
           tableNumber.value,
@@ -226,21 +242,20 @@ const confirmOrder = async () => {
         );
         if (normalized == "Ready" || normalized == "ready") {
           clearInterval(poll);
-          addNotification("Pedido listo para servir (simulado).");
+          addOrderNotification("Pedido listo para servir (simulado).");
         }
       } catch (e) {
         console.error(e);
       }
     }, 3000);
-  } catch (err) {
-    console.error(err);
+  } catch (e) {
+    console.error(e);
     error.value = "Error al confirmar pedido";
   } finally {
     loading.value = false;
   }
 };
 
-// Clear table
 const clearTable = async () => {
   if (!accessCode.value) {
     error.value = "No se encontró el código de acceso";
@@ -250,41 +265,34 @@ const clearTable = async () => {
   error.value = "";
   try {
     await clearAccessCode(accessCode.value);
-    addNotification("¡Mesa desocupada exitosamente! El código ha sido borrado.");
-    // remove persisted order session for this table
+    addOrderNotification("¡Mesa desocupada exitosamente! El código ha sido borrado.");
     try {
       orderSession.remove(waiterId.value || undefined, tableNumber.value);
     } catch (e) {
       console.warn("orderSession.remove failed", e);
     }
-  } catch (err: unknown) {
+    router.push({ name: "waiter-panel" });
+  } catch (e) {
+    console.error(e);
     error.value = "Error al desocupar mesa";
-    console.error(err);
   } finally {
     loading.value = false;
   }
 };
 
-// Navigate back to waiter panel
-const backToPanel = () => {
-  router.push({ name: "waiter-panel" });
-};
+const backToPanel = () => router.push({ name: "waiter-panel" });
 
 onMounted(() => {
   loadMenu();
-  // start SignalR for waiter notifications
   initHub();
-  // Try to rehydrate in-progress order from localStorage
   try {
     const s = orderSession.load(waiterId.value || undefined, tableNumber.value);
     if (s) {
       currentOrderId.value = s.orderId ?? null;
-      if (s.cart && Array.isArray(s.cart) && s.cart.length > 0) {
+      if (s.cart && Array.isArray(s.cart) && s.cart.length > 0)
         cart.value = s.cart as typeof cart.value;
-      }
       orderStatus.value = s.status ?? null;
       if (currentOrderId.value) {
-        // attempt to refresh status from backend
         ordersService
           .getOrder(currentOrderId.value)
           .then((data) => {
@@ -298,16 +306,16 @@ onMounted(() => {
       }
     }
   } catch (e) {
-    // ignore
+    /* ignore */
   }
+  loadClientNotifications();
+  notificationInterval = window.setInterval(loadClientNotifications, 3000);
 });
 
-onActivated(() => {
-  loadMenu();
-});
-
-onBeforeUnmount(() => {
-  stopHub();
+onActivated(() => loadMenu());
+onBeforeUnmount(() => stopHub());
+onUnmounted(() => {
+  if (notificationInterval) window.clearInterval(notificationInterval);
 });
 </script>
 
@@ -377,9 +385,23 @@ onBeforeUnmount(() => {
       </div>
 
       <div class="notifications">
-        <h3>Estado del Pedido</h3>
+        <h3>Notificaciones (Clientes)</h3>
+        <ul v-if="clientNotifications.length > 0">
+          <li v-for="notif in clientNotifications" :key="notif.id" class="notification-item">
+            <div class="notification-content">
+              <p class="name">{{ notif.message }}</p>
+              <small class="name">{{ notif.tableNumber }} • {{ notif.createdAt }}</small>
+            </div>
+            <button @click="dismissNotification(notif)" class="dismiss-btn">✓</button>
+          </li>
+        </ul>
+        <p v-else class="no-notifications">No hay notificaciones</p>
+      </div>
+
+      <div class="notifications">
+        <h3>Notificaciones (Órdenes)</h3>
         <ul>
-          <li class="name" v-for="(notif, index) in notifications" :key="index">{{ notif }}</li>
+          <li v-for="(msg, i) in orderNotifications" :key="i" class="name">{{ msg }}</li>
         </ul>
       </div>
 
@@ -403,7 +425,6 @@ onBeforeUnmount(() => {
   min-height: 100vh;
   padding: 2rem;
 }
-
 .table-card {
   background: white;
   padding: 2rem;
@@ -412,70 +433,78 @@ onBeforeUnmount(() => {
   width: 100%;
   max-width: 1100px;
 }
-
 .layout {
   display: block;
   gap: 1rem;
 }
-
 .name,
 .price,
 .desc {
   color: black;
 }
-
 h1 {
   text-align: center;
   margin-bottom: 1rem;
   color: #333;
 }
-
 .table-info {
   text-align: center;
   color: #666;
   margin-bottom: 2rem;
 }
-
 .notifications {
   background: #f8f9fa;
   padding: 1rem;
   border-radius: 6px;
   margin-bottom: 2rem;
 }
-
 .notifications h3 {
   text-align: center;
   margin-bottom: 1rem;
   color: #333;
 }
-
 .notifications ul {
   list-style: none;
   padding: 0;
   margin: 0;
 }
-
-.notifications li {
+.notification-item {
   background: white;
-  padding: 0.5rem;
-  margin-bottom: 0.5rem;
-  border-radius: 4px;
-  border-left: 3px solid #007bff;
+  padding: 1rem;
+  margin-bottom: 0.75rem;
+  border-radius: 6px;
+  border-left: 4px solid #667eea;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
 }
-
-.notifications p {
+.notification-content {
+  flex: 1;
+}
+.dismiss-btn {
+  background: #4caf50;
+  color: white;
+  border: none;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.no-notifications {
   text-align: center;
   color: #666;
   font-style: italic;
   margin: 1rem 0;
 }
-
 .actions {
   display: flex;
   gap: 1rem;
   justify-content: center;
 }
-
 button {
   background: #dc3545;
   color: white;
@@ -485,38 +514,22 @@ button {
   font-size: 1rem;
   cursor: pointer;
 }
-
 .create-order {
   background: #28a745;
 }
-
 .confirm-order {
   background: #007bff;
 }
-
-button:hover:not(:disabled) {
-  background: var(--color-accent);
-}
-
 button:disabled {
   background: #ccc;
   cursor: not-allowed;
 }
-
 .clear-btn {
   background: #dc3545;
 }
-
 .secondary {
   background: #6c757d;
 }
-
-.success-notification {
-  background: #d4edda !important;
-  border-left-color: #28a745 !important;
-  color: #155724;
-}
-
 .error {
   color: #dc3545;
   margin-top: 1rem;
@@ -526,7 +539,6 @@ button:disabled {
   border-radius: 4px;
   border: 1px solid #f5c6cb;
 }
-
 .menu-item {
   display: flex;
   align-items: center;
@@ -536,7 +548,6 @@ button:disabled {
   margin-bottom: 0.5rem;
   min-height: 72px;
 }
-
 .menu ul {
   display: grid;
   grid-template-columns: 1fr;
@@ -544,17 +555,14 @@ button:disabled {
   padding: 0;
   list-style: none;
 }
-
 @media (min-width: 1024px) {
   .menu ul {
     grid-template-columns: repeat(2, 1fr);
   }
 }
-
 .menu-item.selected {
   border: 2px solid var(--color-accent);
 }
-
 .menu-main {
   display: flex;
   gap: 1rem;
@@ -562,16 +570,6 @@ button:disabled {
   width: 100%;
   justify-content: space-between;
 }
-
-.selected-badge {
-  border: 2px solid #dc3545;
-  color: #dc3545;
-  padding: 4px 8px;
-  border-radius: 6px;
-  font-weight: 700;
-  margin-left: 0.5rem;
-}
-
 .selected-badge-inline {
   min-width: 28px;
   text-align: center;
@@ -581,7 +579,6 @@ button:disabled {
   padding: 2px 6px;
   margin: 0 6px;
 }
-
 .menu-actions {
   display: flex;
   align-items: center;
@@ -590,10 +587,9 @@ button:disabled {
   width: 96px;
   flex-shrink: 0;
 }
-
 .menu-actions .small {
   background: #fff;
-  color: #000000;
+  color: #000;
   border: 1px solid #ddd;
   width: 32px;
   height: 32px;
@@ -604,11 +600,6 @@ button:disabled {
   cursor: pointer;
   padding: 0;
 }
-
-.menu-actions .small:active {
-  transform: translateY(1px);
-}
-
 .cart .cart-row {
   display: flex;
   gap: 1rem;
@@ -616,7 +607,6 @@ button:disabled {
   justify-content: space-between;
   padding: 0.4rem 0.2rem;
 }
-
 .cart ul {
   display: grid;
   grid-template-columns: 1fr;
@@ -624,29 +614,21 @@ button:disabled {
   padding: 0;
   list-style: none;
 }
-
-.menu-actions button {
-  padding: 0.4rem 0.6rem;
-}
-
 @media (min-width: 1024px) {
   .cart ul {
     grid-template-columns: repeat(2, 1fr);
   }
 }
-
 .cart-actions {
   display: flex;
   justify-content: center;
   gap: 1rem;
   margin-top: 1rem;
 }
-
 .cart-actions button {
   min-width: 160px;
   padding: 0.6rem 1rem;
 }
-
 @media (max-width: 480px) {
   .menu-actions {
     width: 84px;

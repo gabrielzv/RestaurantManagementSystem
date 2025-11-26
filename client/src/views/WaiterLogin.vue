@@ -22,11 +22,14 @@ const submit = async () => {
       username: username.value,
       password: password.value,
     });
-    // store waiter session
+    // store waiter token for authentication
+    const token = data.token || data.Token;
+    localStorage.setItem("waiter_token", token);
+    // store waiter session data
     localStorage.setItem(
       "waiter_session",
       JSON.stringify({
-        token: data.token || data.Token,
+        token: token,
         waiterId: data.id || data.Id,
         restaurantId: data.restaurantId || data.RestaurantId,
         username: data.username || data.Username,
@@ -55,17 +58,18 @@ const submit = async () => {
 
       <div class="input-group">
         <input v-model="username" placeholder="Usuario" />
-      </div>        <div class="input-group">
-          <input v-model="password" placeholder="Contraseña" type="password" />
-        </div>
+      </div>
+      <div class="input-group">
+        <input v-model="password" placeholder="Contraseña" type="password" />
+      </div>
 
-        <div class="actions">
-          <button @click="submit" :disabled="loading">
-            {{ loading ? "Ingresando..." : "Entrar" }}
-          </button>
-        </div>
+      <div class="actions">
+        <button @click="submit" :disabled="loading">
+          {{ loading ? "Ingresando..." : "Entrar" }}
+        </button>
+      </div>
 
-        <p class="error" v-if="error">{{ error }}</p>
+      <p class="error" v-if="error">{{ error }}</p>
     </div>
   </main>
 </template>

@@ -73,7 +73,7 @@ public class AccessCodesController : ControllerBase
         await EnsureTableExistsAsync();
 
         // Try to generate a unique 4-digit code (active)
-        string code = null;
+        string? code = null;
         for (int i = 0; i < 10; i++)
         {
             var candidate = Generate4DigitCode();
@@ -246,5 +246,142 @@ public class AccessCodesController : ControllerBase
         var res = await cmd.ExecuteScalarAsync();
         if (res == null || res == DBNull.Value) return false;
         return Convert.ToInt32(res) > 0;
+    }
+
+    internal async Task EnsureNotificationsTableAsync()
+    {
+        var sql = @"CREATE TABLE IF NOT EXISTS WaiterNotifications (
+            Id INTEGER PRIMARY KEY AUTOINCREMENT,
+            WaiterId INTEGER NOT NULL,
+            TableNumber TEXT NOT NULL,
+            AccessCode TEXT NOT NULL,
+            Message TEXT NOT NULL,
+            CreatedAt TEXT NOT NULL,
+            IsRead INTEGER NOT NULL DEFAULT 0
+        );";
+        await _context.Database.ExecuteSqlRawAsync(sql);
+    }
+
+    [HttpPost("notify")]
+    public async Task<IActionResult> NotifyWaiter([FromBody] NotifyWaiterRequest request)
+    {
+        if (string.IsNullOrWhiteSpace(request.AccessCode))
+            return BadRequest("AccessCode is required");
+
+        await EnsureTableExistsAsync();
+        await EnsureNotificationsTableAsync();
+
+        // Get waiter info from access code
+        var query = @"SELECT WaiterId, TableNumber FROM AccessCodes WHERE Code = $code AND IsActive = 1 LIMIT 1;";
+        using var conn = _context.Database.GetDbConnection();
+        await conn.OpenAsync();
+        
+        int? waiterId = null;
+        string? tableNumber = null;
+        
+        using (var cmd = conn.CreateCommand())
+        {
+            cmd.CommandText = query;
+            var p = cmd.CreateParameter(); p.ParameterName = "$code"; p.Value = request.AccessCode; cmd.Parameters.Add(p);
+            using var reader = await cmd.ExecuteReaderAsync();
+            if (await reader.ReadAsync())
+            {
+                waiterId = reader.IsDBNull(0) ? null : reader.GetInt32(0);
+                tableNumber = reader.IsDBNull(1) ? null : reader.GetString(1);
+            }
+        }
+
+        if (!waiterId.HasValue)
+            return NotFound("No waiter assigned to this table");
+
+        // Insert notification
+        var insertSql = @"INSERT INTO WaiterNotifications (WaiterId, TableNumber, AccessCode, Message, CreatedAt, IsRead)
+                          VALUES ($waiterId, $tableNumber, $accessCode, $message, $createdAt, 0);";
+        using (var cmd = conn.CreateCommand())
+        {
+            cmd.CommandText = insertSql;
+            var p = cmd.CreateParameter(); p.ParameterName = "$waiterId"; p.Value = waiterId.Value; cmd.Parameters.Add(p);
+            p = cmd.CreateParameter(); p.ParameterName = "$tableNumber"; p.Value = tableNumber ?? "N/A"; cmd.Parameters.Add(p);
+            p = cmd.CreateParameter(); p.ParameterName = "$accessCode"; p.Value = request.AccessCode; cmd.Parameters.Add(p);
+            p = cmd.CreateParameter(); p.ParameterName = "$message"; p.Value = request.Message ?? $"El cliente de la mesa {tableNumber ?? "N/A"} le está llamando"; cmd.Parameters.Add(p);
+            p = cmd.CreateParameter(); p.ParameterName = "$createdAt"; p.Value = DateTime.UtcNow.ToString("o"); cmd.Parameters.Add(p);
+            await cmd.ExecuteNonQueryAsync();
+        }
+
+        return Ok(new { Message = "Notification sent" });
+    }
+
+    [HttpGet("notifications/{accessCode}")]
+    public async Task<IActionResult> GetNotifications(string accessCode)
+    {
+        if (string.IsNullOrWhiteSpace(accessCode))
+            return BadRequest("AccessCode is required");
+
+        await EnsureTableExistsAsync();
+        await EnsureNotificationsTableAsync();
+
+        // Get WaiterId from access code
+        var getWaiterSql = @"SELECT WaiterId FROM AccessCodes WHERE Code = $code LIMIT 1;";
+        using var conn = _context.Database.GetDbConnection();
+        await conn.OpenAsync();
+        
+        int? waiterId = null;
+        using (var cmd = conn.CreateCommand())
+        {
+            cmd.CommandText = getWaiterSql;
+            var p = cmd.CreateParameter(); p.ParameterName = "$code"; p.Value = accessCode; cmd.Parameters.Add(p);
+            var res = await cmd.ExecuteScalarAsync();
+            if (res != null && res != DBNull.Value)
+                waiterId = Convert.ToInt32(res);
+        }
+
+        if (!waiterId.HasValue)
+            return Ok(new List<object>()); // No waiter, no notifications
+
+        // Get unread notifications
+        var sql = @"SELECT Id, TableNumber, Message, CreatedAt FROM WaiterNotifications 
+                    WHERE AccessCode = $code AND IsRead = 0 
+                    ORDER BY CreatedAt DESC;";
+        var list = new List<object>();
+        using (var cmd = conn.CreateCommand())
+        {
+            cmd.CommandText = sql;
+            var p = cmd.CreateParameter(); p.ParameterName = "$code"; p.Value = accessCode; cmd.Parameters.Add(p);
+            using var reader = await cmd.ExecuteReaderAsync();
+            while (await reader.ReadAsync())
+            {
+                list.Add(new
+                {
+                    Id = reader.GetInt32(0),
+                    TableNumber = reader.GetString(1),
+                    Message = reader.GetString(2),
+                    CreatedAt = reader.GetString(3)
+                });
+            }
+        }
+
+        return Ok(list);
+    }
+
+    [HttpPost("notifications/markread/{notificationId}")]
+    public async Task<IActionResult> MarkNotificationAsRead(int notificationId)
+    {
+        await EnsureNotificationsTableAsync();
+        
+        var sql = "UPDATE WaiterNotifications SET IsRead = 1 WHERE Id = $id;";
+        using var conn = _context.Database.GetDbConnection();
+        await conn.OpenAsync();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = sql;
+        var p = cmd.CreateParameter(); p.ParameterName = "$id"; p.Value = notificationId; cmd.Parameters.Add(p);
+        await cmd.ExecuteNonQueryAsync();
+
+        return Ok(new { Message = "Notification marked as read" });
+    }
+
+    public class NotifyWaiterRequest
+    {
+        public string AccessCode { get; set; } = string.Empty;
+        public string? Message { get; set; }
     }
 }
