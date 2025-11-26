@@ -11,6 +11,8 @@ import { menuItemService } from "@/services/api";
 import { ordersService } from "@/services/ordersService";
 import type { OrderItemReq } from "@/services/ordersService";
 import { orderSession } from "@/services/orderSession";
+import { notificationService } from "@/services/notificationService";
+import type { OrderNotification } from "@/services/notificationService";
 
 const route = useRoute();
 const router = useRouter();
@@ -49,20 +51,34 @@ const orderStatus = ref<string | null>(null);
 
 // Notifications types
 const clientNotifications = ref<ClientNotification[]>([]);
-const orderNotifications = ref<string[]>([]);
+const orderNotifications = ref<OrderNotification[]>([]);
 let notificationInterval: number | undefined;
 
-const addOrderNotification = (msg: string) => orderNotifications.value.unshift(msg);
+const addOrderNotification = (msg: string, meta?: { orderId?: number; tableNumber?: string }) => {
+  const tbl = meta?.tableNumber ?? tableNumber.value;
+  notificationService.add(waiterId.value || undefined, tbl, msg, meta);
+};
+
+const orderStatusClass = (s: string | null) => {
+  if (!s) return "status-other";
+  const st = String(s).toLowerCase();
+  if (st === "ready") return "status-ready";
+  if (st === "sent") return "status-sent";
+  return "status-other";
+};
 
 const loadClientNotifications = async () => {
   try {
     const data = await getNotifications(accessCode.value);
-    const normalized: ClientNotification[] = (data ?? []).map((item: any) => ({
-      id: item.id,
-      tableNumber: item.tableNumber,
-      message: item.message,
-      createdAt: item.createdAt,
-    }));
+    const normalized: ClientNotification[] = (data ?? []).map((item: unknown) => {
+      const it = item as Partial<ClientNotification>;
+      return {
+        id: Number(it.id ?? 0),
+        tableNumber: String(it.tableNumber ?? ""),
+        message: String(it.message ?? ""),
+        createdAt: String(it.createdAt ?? ""),
+      };
+    });
     for (const n of normalized)
       if (!clientNotifications.value.some((c) => c.id === n.id))
         clientNotifications.value.unshift(n);
@@ -92,15 +108,40 @@ const initHub = async () => {
       .configureLogging(LogLevel.None)
       .build();
     hubConnection.on("OrderReady", async (orderId: number) => {
-      addOrderNotification(`Pedido ${orderId} listo (SignalR).`);
-      if (currentOrderId.value === orderId) {
-        try {
-          const data = await ordersService.getOrder(orderId);
-          const st = data.order?.Status ?? data.Order?.Status ?? data.status ?? data.Status;
-          orderStatus.value = st;
-        } catch (e) {
-          console.error(e);
+      try {
+        const data = await ordersService.getOrder(orderId);
+        const tableNum =
+          data.order?.TableNumber ??
+          data.Order?.TableNumber ??
+          data.tableNumber ??
+          data.TableNumber ??
+          data.table ??
+          data.Table ??
+          null;
+        const msg = tableNum
+          ? `Pedido de la mesa ${tableNum} ya está listo`
+          : `Pedido ${orderId} ya está listo`;
+        notificationService.add(waiterId.value || undefined, tableNum ?? tableNumber.value, msg, {
+          orderId,
+          tableNumber: tableNum,
+        });
+        if (currentOrderId.value === orderId) {
+          try {
+            const st = data.order?.Status ?? data.Order?.Status ?? data.status ?? data.Status;
+            orderStatus.value = st;
+          } catch (e) {
+            console.error(e);
+          }
         }
+      } catch (e) {
+        // fallback
+        notificationService.add(
+          waiterId.value || undefined,
+          tableNumber.value,
+          `Pedido ${orderId} listo (SignalR).`,
+          { orderId },
+        );
+        console.error("Error fetching order data for notification", e);
       }
     });
     await hubConnection.start();
@@ -153,7 +194,7 @@ const addToCart = (item: MenuItem) => {
       quantity: 1,
     });
 };
-const increaseItem = (item: MenuItem) => addToCart(item);
+
 const decreaseItem = (item: MenuItem) => {
   const id = item?.id ?? null;
   if (!id) return;
@@ -164,6 +205,7 @@ const decreaseItem = (item: MenuItem) => {
   if (it.quantity > 1) it.quantity -= 1;
   else cart.value.splice(idx, 1);
 };
+
 const getCartQty = (menuItemId: number | undefined | null) => {
   if (!menuItemId) return 0;
   const found = cart.value.find((c) => c.menuItemId === menuItemId);
@@ -178,21 +220,50 @@ const createOrder = async () => {
   loading.value = true;
   error.value = "";
   try {
-    const payload = {
-      restaurantId,
-      waiterId: waiterId.value || undefined,
-      tableNumber: tableNumber.value,
-      items: cart.value.map<OrderItemReq>((c) => ({
-        menuItemId: c.menuItemId,
-        name: c.name,
-        price: c.price,
-        quantity: c.quantity,
-        notes: c.notes,
-      })),
-    };
-    const res = await ordersService.createOrder(payload);
-    currentOrderId.value = res.id ?? res.Id ?? null;
-    addOrderNotification("Pedido creado en borrador. Puede modificar antes de confirmar.");
+    const items = cart.value.map<OrderItemReq>((c) => ({
+      menuItemId: c.menuItemId,
+      name: c.name,
+      price: c.price,
+      quantity: c.quantity,
+      notes: c.notes,
+    }));
+
+    // If we already have a draft/current order, allow updating its items only while it's a draft.
+    if (currentOrderId.value) {
+      const isSent = orderStatus.value ? String(orderStatus.value).toLowerCase() === "sent" : false;
+      if (isSent) {
+        error.value = "El pedido ya fue enviado y no puede modificarse.";
+        loading.value = false;
+        return;
+      }
+
+      try {
+        await ordersService.replaceItems(currentOrderId.value, items);
+        addOrderNotification("Pedido actualizado (borrador).", {
+          orderId: currentOrderId.value,
+          tableNumber: tableNumber.value,
+        });
+      } catch (e) {
+        console.error("Error updating order items", e);
+        error.value = "Error al actualizar pedido en el servidor";
+        loading.value = false;
+        return;
+      }
+    } else {
+      const payload = {
+        restaurantId,
+        waiterId: waiterId.value || undefined,
+        tableNumber: tableNumber.value,
+        items,
+      };
+      const res = await ordersService.createOrder(payload);
+      currentOrderId.value = res.id ?? res.Id ?? null;
+      addOrderNotification("Pedido creado en borrador. Puede confirmar cuando esté listo.", {
+        orderId: currentOrderId.value ?? undefined,
+        tableNumber: tableNumber.value,
+      });
+    }
+
     try {
       orderSession.save(waiterId.value || undefined, tableNumber.value, {
         orderId: currentOrderId.value as number,
@@ -221,7 +292,10 @@ const confirmOrder = async () => {
   error.value = "";
   try {
     await ordersService.confirmOrder(currentOrderId.value);
-    addOrderNotification("Pedido confirmado y enviado a cocina. Esperando preparación...");
+    addOrderNotification("Pedido confirmado y enviado a cocina. Esperando preparación...", {
+      orderId: currentOrderId.value ?? undefined,
+      tableNumber: tableNumber.value,
+    });
     orderStatus.value = "Sent";
     orderSession.updateStatus(waiterId.value || undefined, tableNumber.value, "Sent");
     const poll = setInterval(async () => {
@@ -242,7 +316,10 @@ const confirmOrder = async () => {
         );
         if (normalized == "Ready" || normalized == "ready") {
           clearInterval(poll);
-          addOrderNotification("Pedido listo para servir (simulado).");
+          addOrderNotification("Pedido listo para servir (simulado).", {
+            orderId: currentOrderId.value ?? undefined,
+            tableNumber: tableNumber.value,
+          });
         }
       } catch (e) {
         console.error(e);
@@ -265,7 +342,6 @@ const clearTable = async () => {
   error.value = "";
   try {
     await clearAccessCode(accessCode.value);
-    addOrderNotification("¡Mesa desocupada exitosamente! El código ha sido borrado.");
     try {
       orderSession.remove(waiterId.value || undefined, tableNumber.value);
     } catch (e) {
@@ -287,6 +363,7 @@ onMounted(() => {
   initHub();
   try {
     const s = orderSession.load(waiterId.value || undefined, tableNumber.value);
+    const sessionExists = !!s;
     if (s) {
       currentOrderId.value = s.orderId ?? null;
       if (s.cart && Array.isArray(s.cart) && s.cart.length > 0)
@@ -305,11 +382,45 @@ onMounted(() => {
           .catch(() => {});
       }
     }
+    // If there was no saved session for this waiter+table, clear previous order notifications
+    if (!sessionExists) {
+      try {
+        notificationService.clear(waiterId.value || undefined, tableNumber.value);
+      } catch (err) {
+        console.warn("notificationService.clear failed", err);
+      }
+    }
   } catch (e) {
-    /* ignore */
+    console.warn("orderSession.load failed", e);
   }
   loadClientNotifications();
   notificationInterval = window.setInterval(loadClientNotifications, 3000);
+  // Load persisted order notifications for this waiter+table
+  try {
+    orderNotifications.value = notificationService.get(
+      waiterId.value || undefined,
+      tableNumber.value,
+    );
+  } catch {
+    orderNotifications.value = [];
+  }
+  // subscribe to new notifications
+  const unsub = notificationService.subscribe(
+    ({ waiterId: wid, tableNumber: tnum, notification }) => {
+      if (
+        (waiterId.value || undefined) === (wid || undefined) &&
+        (tnum ?? tableNumber.value) === tableNumber.value
+      ) {
+        orderNotifications.value.unshift(notification);
+      }
+    },
+  );
+  // ensure we remove subscription on unmount
+  onUnmounted(() => {
+    try {
+      unsub();
+    } catch {}
+  });
 });
 
 onActivated(() => loadMenu());
@@ -347,7 +458,7 @@ onUnmounted(() => {
                   <div class="name selected-badge-inline" v-if="getCartQty(item.id) > 0">
                     {{ getCartQty(item.id) }}
                   </div>
-                  <button class="small" @click.prevent="increaseItem(item)" aria-label="Añadir">
+                  <button class="small" @click.prevent="addToCart(item)" aria-label="Añadir">
                     +
                   </button>
                 </div>
@@ -369,8 +480,22 @@ onUnmounted(() => {
           </ul>
           <div class="name" v-if="cart.length === 0">No se han agregado items al pedido.</div>
           <div class="cart-actions">
-            <button class="create-order" @click="createOrder" :disabled="loading">
-              Crear Pedido
+            <button
+              class="create-order"
+              @click="createOrder"
+              :disabled="
+                loading || (orderStatus ? String(orderStatus).toLowerCase() === 'sent' : false)
+              "
+            >
+              {{
+                loading
+                  ? currentOrderId
+                    ? "Actualizando..."
+                    : "Creando..."
+                  : currentOrderId
+                    ? "Actualizar Pedido"
+                    : "Crear Pedido"
+              }}
             </button>
             <button
               class="confirm-order"
@@ -380,7 +505,6 @@ onUnmounted(() => {
               Enviar Pedido
             </button>
           </div>
-          <div class="name" v-if="orderStatus">Estado: {{ orderStatus }}</div>
         </section>
       </div>
 
@@ -399,10 +523,24 @@ onUnmounted(() => {
       </div>
 
       <div class="notifications">
+        <h3>Estado</h3>
+        <div v-if="orderStatus" :class="['order-status', orderStatusClass(orderStatus)]">
+          Estado: {{ orderStatus }}
+        </div>
+        <p v-else class="no-notifications">No se ha realizado ningún pedido</p>
+      </div>
+
+      <div class="notifications">
         <h3>Notificaciones (Órdenes)</h3>
-        <ul>
-          <li v-for="(msg, i) in orderNotifications" :key="i" class="name">{{ msg }}</li>
+        <ul v-if="orderNotifications.length > 0">
+          <li v-for="notif in orderNotifications" :key="notif.id" class="notification-item">
+            <div class="notification-content">
+              <p class="name">{{ notif.message }}</p>
+              <small class="name">{{ notif.tableNumber || "" }} • {{ notif.createdAt }}</small>
+            </div>
+          </li>
         </ul>
+        <p v-else class="no-notifications">No hay notificaciones</p>
       </div>
 
       <div class="actions">
@@ -548,6 +686,22 @@ button:disabled {
   margin-bottom: 0.5rem;
   min-height: 72px;
 }
+
+.menu {
+  padding: 0 0.6rem;
+  box-sizing: border-box;
+}
+.menu-item {
+  box-sizing: border-box;
+  padding: 0.9rem;
+}
+.menu-main .desc,
+.menu-main .name,
+.menu-main strong {
+  white-space: normal;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
 .menu ul {
   display: grid;
   grid-template-columns: 1fr;
@@ -624,6 +778,8 @@ button:disabled {
   justify-content: center;
   gap: 1rem;
   margin-top: 1rem;
+  margin-bottom: 1.5rem;
+  padding: 0 0.75rem;
 }
 .cart-actions button {
   min-width: 160px;
@@ -638,7 +794,43 @@ button:disabled {
     height: 28px;
   }
   .cart-actions button {
-    min-width: 120px;
+    min-width: 100px;
   }
+}
+
+@media (max-width: 700px) {
+  .panel-card {
+    padding-left: 1rem;
+    padding-right: 1rem;
+  }
+  .menu {
+    padding-left: 0.75rem;
+    padding-right: 0.75rem;
+  }
+  .cart-actions {
+    padding-left: 0.1rem;
+    padding-right: 0.1rem;
+  }
+  .menu-item {
+    padding: 0.7rem;
+  }
+}
+
+.order-status {
+  display: inline-block;
+  padding: 0.4rem 0.8rem;
+  border-radius: 8px;
+  font-weight: 700;
+  color: #fff;
+  text-align: center;
+}
+.status-ready {
+  background: #28a745;
+}
+.status-sent {
+  background: #007bff;
+}
+.status-other {
+  background: #6c757d;
 }
 </style>

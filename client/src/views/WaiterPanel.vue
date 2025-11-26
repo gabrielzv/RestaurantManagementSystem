@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from "vue";
+import { ref, onMounted, onUnmounted } from "vue";
 import { useRouter } from "vue-router";
 import { createAccessCode, getAccessCodesByWaiter } from "@/services/accessCodeService";
 
@@ -15,6 +15,34 @@ const codes = ref<
   Array<{ id: number; code: string; tableNumber?: string; usedAt?: string; waiterId?: number }>
 >([]);
 
+import { notificationService } from "@/services/notificationService";
+import { orderSession } from "@/services/orderSession";
+const statuses = ref<Record<string, string>>({});
+
+// Refresh statuses for all codes
+const refreshStatuses = () => {
+  try {
+    for (const c of codes.value) {
+      const tbl = c.tableNumber;
+      if (!tbl) continue;
+      const s = orderSession.load(session?.waiterId, tbl);
+      if (s && s.status) {
+        statuses.value[tbl] = s.status;
+        continue;
+      }
+      const nots = notificationService.get(session?.waiterId, tbl);
+      if (Array.isArray(nots) && nots.length > 0) {
+        const first = nots[0];
+        if (first && first.message) {
+          statuses.value[tbl] = first.message;
+        }
+      }
+    }
+  } catch (err) {
+    console.warn("refreshStatuses failed", err);
+  }
+};
+
 if (!session) {
   router.push({ name: "waiter-login" });
 }
@@ -24,6 +52,9 @@ const loadCodes = async () => {
   try {
     const data = await getAccessCodesByWaiter(session.waiterId);
     codes.value = data;
+    try {
+      refreshStatuses();
+    } catch {}
   } catch (err) {
     console.error(err);
   }
@@ -32,13 +63,13 @@ const loadCodes = async () => {
 const generate = async () => {
   error.value = "";
   if (!session) return;
-  
+
   // Validate table number is required
   if (!tableNumber.value || tableNumber.value.trim() === "") {
     error.value = "El número de mesa es obligatorio";
     return;
   }
-  
+
   loading.value = true;
   try {
     const req = {
@@ -64,14 +95,31 @@ const logout = () => {
 };
 
 const attendTable = (tableNumber: string, waiterId: number, code: string) => {
-  router.push({ name: "waiter-table", params: { tableNumber, waiterId: waiterId.toString(), code } });
+  router.push({
+    name: "waiter-table",
+    params: { tableNumber, waiterId: waiterId.toString(), code },
+  });
 };
 
 // Load codes on mount
-import { onMounted } from "vue";
 onMounted(() => {
   loadCodes();
   setInterval(loadCodes, 5000);
+  // initialize statuses per code
+  refreshStatuses();
+  const unsub = notificationService.subscribe(
+    ({ waiterId: wid, tableNumber: tbl, notification }) => {
+      if (!session) return;
+      if (wid === session.waiterId && tbl) {
+        statuses.value[tbl] = notification.message;
+      }
+    },
+  );
+  onUnmounted(() => {
+    try {
+      unsub();
+    } catch {}
+  });
 });
 
 // Also load codes when component is activated (when returning from other pages)
@@ -85,60 +133,77 @@ onActivated(() => {
   <main class="center">
     <div class="panel-card">
       <h1>Panel Mesero</h1>
-        <p class="welcome">Bienvenido {{ session?.username || "Mesero" }}</p>
+      <p class="welcome">Bienvenido {{ session?.username || "Mesero" }}</p>
+      <div class="form-section">
+        <div class="form-row">
+          <input v-model="tableNumber" placeholder="Número de mesa *" required />
+        </div>
+        <div class="actions">
+          <button @click="generate" :disabled="loading">
+            {{ loading ? "Generando..." : "Generar código" }}
+          </button>
+          <button @click="logout" class="secondary">Salir</button>
+        </div>
+      </div>
+      <div v-if="generated" class="generated">
+        <h3>¡Código generado!</h3>
+        <strong>{{ generated.code }}</strong>
+        <p>Expira: {{ generated.expiresAt || "Nunca" }}</p>
+      </div>
 
-        <div class="form-section">
-          <div class="form-row">
-            <input v-model="tableNumber" placeholder="Número de mesa *" required />
-          </div>
-
-          <div class="actions">
-            <button @click="generate" :disabled="loading">
-              {{ loading ? "Generando..." : "Generar código" }}
+      <div class="codes">
+        <h3>Códigos Generados</h3>
+        <transition-group name="code-item" tag="ul" v-if="codes.length > 0">
+          <li v-for="code in codes" :key="code.id" class="code-item">
+            <div class="code-info">
+              <div class="code-number">{{ code.code }}</div>
+              <div class="code-details">
+                <div>Mesa: {{ code.tableNumber || "N/A" }}</div>
+                <transition name="status" mode="out-in">
+                  <div
+                    v-if="code.tableNumber && statuses[code.tableNumber]"
+                    :key="`status-${code.tableNumber}`"
+                    class="name status-badge"
+                  >
+                    Estado: {{ statuses[code.tableNumber] }}
+                  </div>
+                </transition>
+              </div>
+            </div>
+            <div class="code-status" :class="code.usedAt ? 'used' : 'generated'">
+              {{ code.usedAt ? "Usado" : "Generado" }}
+            </div>
+            <button
+              v-if="code.usedAt && code.tableNumber"
+              @click="attendTable(code.tableNumber, session.waiterId, code.code)"
+              class="attend-btn"
+            >
+              Atender Mesa
             </button>
-            <button @click="logout" class="secondary">Salir</button>
-          </div>
-        </div>
+          </li>
+        </transition-group>
+        <p v-else style="text-align: center; color: #666; margin: 2rem 0">
+          No hay códigos generados aún
+        </p>
+      </div>
 
-        <div v-if="generated" class="generated">
-          <h3>¡Código generado!</h3>
-          <strong>{{ generated.code }}</strong>
-          <p>Expira: {{ generated.expiresAt || 'Nunca' }}</p>
-        </div>
-
-        <div class="codes">
-          <h3>Códigos Generados</h3>
-          <ul v-if="codes.length > 0">
-            <li v-for="code in codes" :key="code.id" class="code-item">
-              <div class="code-info">
-                <div class="code-number">{{ code.code }}</div>
-                <div class="code-details">
-                  Mesa: {{ code.tableNumber || "N/A" }}
-                </div>
-              </div>
-              <div class="code-status" :class="code.usedAt ? 'used' : 'generated'">
-                {{ code.usedAt ? "Usado" : "Generado" }}
-              </div>
-              <button
-                v-if="code.usedAt && code.tableNumber"
-                @click="attendTable(code.tableNumber, session.waiterId, code.code)"
-                class="attend-btn"
-              >
-                Atender Mesa
-              </button>
-            </li>
-          </ul>
-          <p v-else style="text-align: center; color: #666; margin: 2rem 0;">
-            No hay códigos generados aún
-          </p>
-        </div>
-
-        <p class="error" v-if="error">{{ error }}</p>
+      <p class="error" v-if="error">{{ error }}</p>
     </div>
   </main>
 </template>
 
 <style scoped>
+.notifications {
+  padding: 1rem;
+  border-radius: 6px;
+  margin-bottom: 1.5rem;
+  color: #000000;
+}
+
+.name {
+  color: #000000;
+}
+
 .center {
   display: flex;
   justify-content: center;
@@ -305,6 +370,59 @@ button.secondary {
   font-size: 0.9rem;
 }
 
+/* Responsive styles */
+@media (max-width: 600px) {
+  .panel-card {
+    padding: 1rem;
+  }
+  .form-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .actions {
+    flex-direction: column;
+    gap: 0.5rem;
+    margin-top: 0.75rem;
+  }
+  .actions button {
+    width: 100%;
+    padding: 0.6rem 0.75rem;
+  }
+  .codes {
+    padding: 1rem;
+  }
+  .code-item {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .code-status {
+    margin-top: 0.5rem;
+    align-self: flex-start;
+  }
+  .attend-btn {
+    width: 100%;
+    margin-top: 0.5rem;
+  }
+  .generated {
+    padding: 0.75rem;
+  }
+  .code-number {
+    font-size: 1rem;
+  }
+}
+
+@media (max-width: 400px) {
+  .panel-card {
+    padding: 0.75rem;
+  }
+  .welcome {
+    font-size: 0.95rem;
+  }
+  .code-number {
+    font-size: 0.95rem;
+  }
+}
+
 .error {
   color: #dc3545;
   margin-top: 1rem;
@@ -313,5 +431,37 @@ button.secondary {
   padding: 0.5rem;
   border-radius: 4px;
   border: 1px solid #f5c6cb;
+}
+
+/* Transition for status badge */
+.status-enter-from,
+.status-leave-to {
+  opacity: 0;
+  transform: translateY(-6px) scale(0.98);
+}
+.status-enter-active,
+.status-leave-active {
+  transition: all 220ms cubic-bezier(0.2, 0.9, 0.2, 1);
+}
+.status-enter-to,
+.status-leave-from {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+}
+
+/* Transition-group for code items */
+.code-item-enter-from {
+  opacity: 0;
+  transform: translateY(-8px) scale(0.995);
+}
+.code-item-enter-active {
+  transition: all 260ms cubic-bezier(0.2, 0.9, 0.2, 1);
+}
+.code-item-leave-to {
+  opacity: 0;
+  transform: translateY(6px);
+}
+.code-item-leave-active {
+  transition: all 200ms ease;
 }
 </style>
