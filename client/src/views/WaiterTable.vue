@@ -6,6 +6,7 @@ import { clearAccessCode } from "@/services/accessCodeService";
 import { menuItemService } from "@/services/api";
 import { ordersService } from "@/services/ordersService";
 import type { OrderItemReq } from "@/services/ordersService";
+import { orderSession } from "@/services/orderSession";
 
 const route = useRoute();
 const router = useRouter();
@@ -171,6 +172,18 @@ const createOrder = async () => {
     const res = await ordersService.createOrder(payload);
     currentOrderId.value = res.id ?? res.Id ?? res.Id;
     addNotification("Pedido creado en borrador. Puede modificar antes de confirmar.");
+    // Persist the created order so it survives a refresh
+    try {
+      orderSession.save(waiterId.value || undefined, tableNumber.value, {
+        orderId: currentOrderId.value as number,
+        waiterId: waiterId.value,
+        tableNumber: tableNumber.value,
+        cart: cart.value,
+        status: orderStatus.value ?? null,
+      });
+    } catch (e) {
+      console.warn("orderSession.save failed", e);
+    }
   } catch (err) {
     console.error(err);
     error.value = "Error al crear pedido";
@@ -191,6 +204,8 @@ const confirmOrder = async () => {
     await ordersService.confirmOrder(currentOrderId.value);
     addNotification("Pedido confirmado y enviado a cocina. Esperando preparación...");
     orderStatus.value = "Sent";
+    // update persisted status
+    orderSession.updateStatus(waiterId.value || undefined, tableNumber.value, "Sent");
     // Poll for status until Ready
     const poll = setInterval(async () => {
       try {
@@ -203,6 +218,12 @@ const confirmOrder = async () => {
           data.Order?.Status;
         const normalized = st ?? data.Order?.Status ?? data.order?.Status;
         orderStatus.value = normalized;
+        // update persisted status each poll
+        orderSession.updateStatus(
+          waiterId.value || undefined,
+          tableNumber.value,
+          String(normalized),
+        );
         if (normalized == "Ready" || normalized == "ready") {
           clearInterval(poll);
           addNotification("Pedido listo para servir (simulado).");
@@ -230,6 +251,12 @@ const clearTable = async () => {
   try {
     await clearAccessCode(accessCode.value);
     addNotification("¡Mesa desocupada exitosamente! El código ha sido borrado.");
+    // remove persisted order session for this table
+    try {
+      orderSession.remove(waiterId.value || undefined, tableNumber.value);
+    } catch (e) {
+      console.warn("orderSession.remove failed", e);
+    }
   } catch (err: unknown) {
     error.value = "Error al desocupar mesa";
     console.error(err);
@@ -247,6 +274,32 @@ onMounted(() => {
   loadMenu();
   // start SignalR for waiter notifications
   initHub();
+  // Try to rehydrate in-progress order from localStorage
+  try {
+    const s = orderSession.load(waiterId.value || undefined, tableNumber.value);
+    if (s) {
+      currentOrderId.value = s.orderId ?? null;
+      if (s.cart && Array.isArray(s.cart) && s.cart.length > 0) {
+        cart.value = s.cart as typeof cart.value;
+      }
+      orderStatus.value = s.status ?? null;
+      if (currentOrderId.value) {
+        // attempt to refresh status from backend
+        ordersService
+          .getOrder(currentOrderId.value)
+          .then((data) => {
+            const st = data.order?.Status ?? data.Order?.Status ?? data.status ?? data.Status;
+            if (st) {
+              orderStatus.value = st;
+              orderSession.updateStatus(waiterId.value || undefined, tableNumber.value, String(st));
+            }
+          })
+          .catch(() => {});
+      }
+    }
+  } catch (e) {
+    // ignore
+  }
 });
 
 onActivated(() => {
@@ -308,8 +361,14 @@ onBeforeUnmount(() => {
           </ul>
           <div class="name" v-if="cart.length === 0">No se han agregado items al pedido.</div>
           <div class="cart-actions">
-            <button class="create-order" @click="createOrder" :disabled="loading">Crear Pedido</button>
-            <button class="confirm-order" @click="confirmOrder" :disabled="!currentOrderId || loading">
+            <button class="create-order" @click="createOrder" :disabled="loading">
+              Crear Pedido
+            </button>
+            <button
+              class="confirm-order"
+              @click="confirmOrder"
+              :disabled="!currentOrderId || loading"
+            >
               Enviar Pedido
             </button>
           </div>
