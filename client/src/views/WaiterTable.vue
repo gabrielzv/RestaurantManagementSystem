@@ -22,6 +22,9 @@ const waiterId = ref(Number(route.params.waiterId as string));
 const accessCode = ref(route.params.code as string);
 const loading = ref(false);
 const error = ref("");
+const successMessage = ref("");
+const billing = ref(false);
+let billingTimeout: number | undefined;
 
 const sessionRaw =
   typeof localStorage !== "undefined" ? localStorage.getItem("waiter_session") : null;
@@ -66,6 +69,13 @@ const orderStatusClass = (s: string | null) => {
   if (st === "sent") return "status-sent";
   return "status-other";
 };
+
+const formatCurrency = (value: number) =>
+  new Intl.NumberFormat("es-CR", {
+    style: "currency",
+    currency: "CRC",
+    minimumFractionDigits: 2,
+  }).format(value);
 
 const loadClientNotifications = async () => {
   try {
@@ -213,6 +223,7 @@ const getCartQty = (menuItemId: number | undefined | null) => {
 };
 
 const createOrder = async () => {
+  successMessage.value = "";
   if (cart.value.length === 0) {
     error.value = "El pedido está vacío";
     return;
@@ -284,6 +295,7 @@ const createOrder = async () => {
 };
 
 const confirmOrder = async () => {
+  successMessage.value = "";
   if (!currentOrderId.value) {
     error.value = "No hay pedido para confirmar";
     return;
@@ -333,11 +345,18 @@ const confirmOrder = async () => {
   }
 };
 
-const clearTable = async () => {
+const clearTable = async (options?: { preserveMessage?: boolean }) => {
   if (!accessCode.value) {
     error.value = "No se encontró el código de acceso";
     return;
   }
+  const preserveMessage = options?.preserveMessage ?? false;
+  if (billingTimeout) {
+    window.clearTimeout(billingTimeout);
+    billingTimeout = undefined;
+  }
+  if (!preserveMessage) successMessage.value = "";
+  billing.value = false;
   loading.value = true;
   error.value = "";
   try {
@@ -353,6 +372,51 @@ const clearTable = async () => {
     error.value = "Error al desocupar mesa";
   } finally {
     loading.value = false;
+  }
+};
+
+const billTable = async () => {
+  if (billing.value) return;
+  if (!accessCode.value) {
+    error.value = "No se encontró el código de acceso";
+    return;
+  }
+  if (billingTimeout) {
+    window.clearTimeout(billingTimeout);
+    billingTimeout = undefined;
+  }
+  billing.value = true;
+  error.value = "";
+  successMessage.value = "";
+  try {
+    const data = await ordersService.getByAccessCode(accessCode.value);
+    const ordersRaw = Array.isArray(data?.orders)
+      ? data.orders
+      : Array.isArray(data?.Orders)
+        ? data.Orders
+        : [];
+    let subtotal = Number(data?.subtotal ?? data?.Subtotal ?? NaN);
+    if (!Number.isFinite(subtotal)) {
+      subtotal = ordersRaw.reduce((acc: number, order: any) => {
+        const total = Number(order?.total ?? order?.Total ?? 0);
+        return acc + (Number.isFinite(total) ? total : 0);
+      }, 0);
+    }
+    if (!Number.isFinite(subtotal)) subtotal = 0;
+    const formattedSubtotal = formatCurrency(subtotal);
+    successMessage.value = `El subtotal a cobrar es ${formattedSubtotal}. Desocupando mesa en 5 segundos...`;
+    billingTimeout = window.setTimeout(async () => {
+      try {
+        await clearTable({ preserveMessage: true });
+      } finally {
+        billing.value = false;
+        billingTimeout = undefined;
+      }
+    }, 5000);
+  } catch (e) {
+    console.error("Error al calcular subtotal", e);
+    error.value = "Error al calcular subtotal de la mesa";
+    billing.value = false;
   }
 };
 
@@ -427,6 +491,10 @@ onActivated(() => loadMenu());
 onBeforeUnmount(() => stopHub());
 onUnmounted(() => {
   if (notificationInterval) window.clearInterval(notificationInterval);
+  if (billingTimeout) {
+    window.clearTimeout(billingTimeout);
+    billingTimeout = undefined;
+  }
 });
 </script>
 
@@ -544,12 +612,16 @@ onUnmounted(() => {
       </div>
 
       <div class="actions">
-        <button @click="clearTable" :disabled="loading" class="clear-btn">
+        <button @click="billTable" :disabled="loading || billing" class="bill-btn">
+          {{ billing ? "Preparando cobro..." : "Cobrar Mesa" }}
+        </button>
+        <button @click="clearTable()" :disabled="loading || billing" class="clear-btn">
           {{ loading ? "Desocupando..." : "Desocupar Mesa" }}
         </button>
         <button @click="backToPanel" class="secondary">Volver al Panel</button>
       </div>
 
+      <p class="success" v-if="successMessage">{{ successMessage }}</p>
       <p class="error" v-if="error">{{ error }}</p>
     </div>
   </main>
@@ -652,6 +724,9 @@ button {
   font-size: 1rem;
   cursor: pointer;
 }
+.bill-btn {
+  background: #ff9800;
+}
 .create-order {
   background: #28a745;
 }
@@ -667,6 +742,15 @@ button:disabled {
 }
 .secondary {
   background: #6c757d;
+}
+.success {
+  color: #155724;
+  margin-top: 1rem;
+  text-align: center;
+  background: #d4edda;
+  padding: 0.5rem;
+  border-radius: 4px;
+  border: 1px solid #c3e6cb;
 }
 .error {
   color: #dc3545;
