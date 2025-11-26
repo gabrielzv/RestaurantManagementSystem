@@ -36,7 +36,8 @@ builder.Services.AddCors(options =>
         {
             policy.WithOrigins("http://localhost:5173", "http://localhost:8080")
                   .AllowAnyHeader()
-                  .AllowAnyMethod();
+                  .AllowAnyMethod()
+                  .AllowCredentials();
         });
 });
 
@@ -44,6 +45,7 @@ builder.Services.AddCors(options =>
 builder.Services.AddOpenApi();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
+builder.Services.AddSignalR();
 
 var app = builder.Build();
 
@@ -69,6 +71,8 @@ app.UseCors("AllowVueApp");
 app.UseAuthorization();
 
 app.MapControllers();
+// Map SignalR hubs
+app.MapHub<RestaurantManagement.API.Hubs.OrderHub>("/orderHub");
 
 app.Run();
 
