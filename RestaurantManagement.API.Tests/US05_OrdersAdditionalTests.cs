@@ -56,21 +56,40 @@ public class US05_OrdersAdditionalTests : IDisposable
         var controller = new OrdersController(_context, config, hub);
 
         var req = new OrdersController.CreateOrderRequest { RestaurantId = 1, TableNumber = "NoItems" };
-        var createRes = await controller.CreateOrder(req);
-        Assert.IsType<OkObjectResult>(createRes);
-        var created = createRes as OkObjectResult;
-        var idProp = created!.Value.GetType().GetProperty("Id");
-        var id = Convert.ToInt32(idProp!.GetValue(created.Value));
+        var createResult = await controller.CreateOrder(req);
+        var created = Assert.IsType<OkObjectResult>(createResult);
+        var createdValue = created.Value ?? throw new Xunit.Sdk.XunitException("Expected value on OkObjectResult");
+        var idProp = createdValue.GetType().GetProperty("Id");
+        Assert.NotNull(idProp);
+        if (idProp is null) throw new Xunit.Sdk.XunitException("Id property missing");
+        var idObj = idProp.GetValue(createdValue);
+        Assert.NotNull(idObj);
+        if (idObj is null) throw new Xunit.Sdk.XunitException("Id value missing");
+        var id = Convert.ToInt32(idObj);
 
-        var getRes = await controller.GetOrder(id) as OkObjectResult;
-        Assert.NotNull(getRes?.Value);
-        var orderObj = getRes.Value.GetType().GetProperty("Order")?.GetValue(getRes.Value);
-        var total = orderObj!.GetType().GetProperty("Total")?.GetValue(orderObj) as decimal?;
+        var getResult = await controller.GetOrder(id);
+        var getRes = Assert.IsType<OkObjectResult>(getResult);
+        var getValue = getRes.Value ?? throw new Xunit.Sdk.XunitException("Expected value on OkObjectResult");
+        var orderProp = getValue.GetType().GetProperty("Order");
+        Assert.NotNull(orderProp);
+        if (orderProp is null) throw new Xunit.Sdk.XunitException("Order property missing");
+        var orderObjCandidate = orderProp.GetValue(getValue);
+        Assert.NotNull(orderObjCandidate);
+        if (orderObjCandidate is null) throw new Xunit.Sdk.XunitException("Order object missing");
+        var orderObj = orderObjCandidate;
+        var total = orderObj.GetType().GetProperty("Total")?.GetValue(orderObj) as decimal?;
         Assert.Null(total);
 
-        var items = getRes.Value.GetType().GetProperty("Items")?.GetValue(getRes.Value) as System.Collections.IEnumerable;
+        var itemsProp = getValue.GetType().GetProperty("Items");
+        Assert.NotNull(itemsProp);
+        if (itemsProp is null) throw new Xunit.Sdk.XunitException("Items property missing");
+        var itemsObj = itemsProp.GetValue(getValue) ?? Array.Empty<object>();
+        var items = Assert.IsAssignableFrom<System.Collections.IEnumerable>(itemsObj);
         var list = new System.Collections.Generic.List<object>();
-        foreach (var it in items!) list.Add(it);
+        foreach (var it in items)
+        {
+            if (it != null) list.Add(it);
+        }
         Assert.Empty(list);
     }
 
@@ -87,17 +106,34 @@ public class US05_OrdersAdditionalTests : IDisposable
             TableNumber = "R1",
             Items = new[] { new OrdersController.OrderItemRequest { Name = "One", Price = 1m, Quantity = 1 }, new OrdersController.OrderItemRequest { Name = "Two", Price = 2m, Quantity = 1 } }
         };
-        var createRes = await controller.CreateOrder(req) as OkObjectResult;
-        var id = Convert.ToInt32(createRes!.Value.GetType().GetProperty("Id")!.GetValue(createRes.Value));
+        var createResult = await controller.CreateOrder(req);
+        var createRes = Assert.IsType<OkObjectResult>(createResult);
+        var createValue = createRes.Value ?? throw new Xunit.Sdk.XunitException("Expected value on OkObjectResult");
+        var idProp = createValue.GetType().GetProperty("Id");
+        Assert.NotNull(idProp);
+        if (idProp is null) throw new Xunit.Sdk.XunitException("Id property missing");
+        var idObj = idProp.GetValue(createValue);
+        Assert.NotNull(idObj);
+        if (idObj is null) throw new Xunit.Sdk.XunitException("Id value missing");
+        var id = Convert.ToInt32(idObj);
 
         // Replace with empty array
         var replace = await controller.ReplaceItems(id, new OrdersController.OrderItemRequest[] { });
         Assert.IsType<OkResult>(replace);
 
-        var getRes = await controller.GetOrder(id) as OkObjectResult;
-        var items = getRes!.Value.GetType().GetProperty("Items")?.GetValue(getRes.Value) as System.Collections.IEnumerable;
+        var getResult = await controller.GetOrder(id);
+        var getRes = Assert.IsType<OkObjectResult>(getResult);
+        var getValue = getRes.Value ?? throw new Xunit.Sdk.XunitException("Expected value on OkObjectResult");
+        var itemsProp = getValue.GetType().GetProperty("Items");
+        Assert.NotNull(itemsProp);
+        if (itemsProp is null) throw new Xunit.Sdk.XunitException("Items property missing");
+        var itemsObj = itemsProp.GetValue(getValue) ?? Array.Empty<object>();
+        var items = Assert.IsAssignableFrom<System.Collections.IEnumerable>(itemsObj);
         var list = new System.Collections.Generic.List<object>();
-        foreach (var it in items!) list.Add(it);
+        foreach (var it in items)
+        {
+            if (it != null) list.Add(it);
+        }
         Assert.Empty(list);
     }
 
@@ -116,11 +152,12 @@ public class US05_OrdersAdditionalTests : IDisposable
         await controller.CreateOrder(r2);
         await controller.CreateOrder(r3);
 
-        var res = await controller.GetByWaiter(5) as OkObjectResult;
-        Assert.NotNull(res?.Value);
-        var list = res.Value as System.Collections.IEnumerable;
+        var result = await controller.GetByWaiter(5);
+        var res = Assert.IsType<OkObjectResult>(result);
+        var value = res.Value ?? throw new Xunit.Sdk.XunitException("Expected value on OkObjectResult");
+        var enumerable = Assert.IsAssignableFrom<System.Collections.IEnumerable>(value);
         var count = 0;
-        foreach (var _ in list!) count++;
+        foreach (var _ in enumerable) count++;
         Assert.Equal(2, count);
     }
 
