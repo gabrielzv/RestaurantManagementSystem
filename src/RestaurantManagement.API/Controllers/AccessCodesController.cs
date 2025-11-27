@@ -213,18 +213,104 @@ public class AccessCodesController : ControllerBase
 
         await EnsureTableExistsAsync();
 
-        var sql = "DELETE FROM AccessCodes WHERE Code = $code;";
+        // Remove the access code and also delete the orders and their items
+
         using var conn = _context.Database.GetDbConnection();
         await conn.OpenAsync();
-        using var cmd = conn.CreateCommand();
-        cmd.CommandText = sql;
-        var p = cmd.CreateParameter(); p.ParameterName = "$code"; p.Value = code; cmd.Parameters.Add(p);
 
-        var rowsAffected = await cmd.ExecuteNonQueryAsync();
-        if (rowsAffected == 0)
-            return NotFound("Code not found");
+        // Uses transaction to ensure all-or-nothing
+        using var tx = conn.BeginTransaction();
+        try
+        {
+            // Get RestaurantId and TableNumber for this code
+            string? tableNumber = null;
+            int? restaurantId = null;
+            using (var q = conn.CreateCommand())
+            {
+                q.Transaction = tx;
+                q.CommandText = "SELECT RestaurantId, TableNumber FROM AccessCodes WHERE Code = $code LIMIT 1;";
+                var qp = q.CreateParameter(); qp.ParameterName = "$code"; qp.Value = code; q.Parameters.Add(qp);
+                using var reader = await q.ExecuteReaderAsync();
+                if (await reader.ReadAsync())
+                {
+                    restaurantId = reader.IsDBNull(0) ? (int?)null : reader.GetInt32(0);
+                    tableNumber = reader.IsDBNull(1) ? null : reader.GetString(1);
+                }
+            }
 
-        return Ok(new { Message = "Code deleted successfully" });
+            // If table info, delete order items and orders for that table
+            if (restaurantId.HasValue && !string.IsNullOrWhiteSpace(tableNumber))
+            {
+                // Ensure Orders/OrderItems tables exist
+                var createOrders = @"CREATE TABLE IF NOT EXISTS Orders (
+                    Id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    RestaurantId INTEGER NOT NULL,
+                    WaiterId INTEGER,
+                    TableNumber TEXT,
+                    Status TEXT NOT NULL,
+                    CreatedAt TEXT NOT NULL,
+                    UpdatedAt TEXT,
+                    Total NUMERIC
+                );";
+                var createItems = @"CREATE TABLE IF NOT EXISTS OrderItems (
+                    Id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    OrderId INTEGER NOT NULL,
+                    MenuItemId INTEGER,
+                    Name TEXT,
+                    Price NUMERIC,
+                    Quantity INTEGER NOT NULL,
+                    Notes TEXT
+                );";
+                using (var createCmd = conn.CreateCommand()) { createCmd.Transaction = tx; createCmd.CommandText = createOrders; await createCmd.ExecuteNonQueryAsync(); }
+                using (var createCmd = conn.CreateCommand()) { createCmd.Transaction = tx; createCmd.CommandText = createItems; await createCmd.ExecuteNonQueryAsync(); }
+
+                // Delete items for orders matching this table/restaurant
+                var delItemsSql = @"DELETE FROM OrderItems WHERE OrderId IN (
+                    SELECT Id FROM Orders WHERE RestaurantId = $restaurantId AND TableNumber = $tableNumber
+                );";
+                using (var delItems = conn.CreateCommand())
+                {
+                    delItems.Transaction = tx;
+                    delItems.CommandText = delItemsSql;
+                    var p1 = delItems.CreateParameter(); p1.ParameterName = "$restaurantId"; p1.Value = restaurantId.Value; delItems.Parameters.Add(p1);
+                    var p2 = delItems.CreateParameter(); p2.ParameterName = "$tableNumber"; p2.Value = tableNumber; delItems.Parameters.Add(p2);
+                    await delItems.ExecuteNonQueryAsync();
+                }
+
+                // Delete orders for that table/restaurant
+                var delOrdersSql = "DELETE FROM Orders WHERE RestaurantId = $restaurantId AND TableNumber = $tableNumber;";
+                using (var delOrders = conn.CreateCommand())
+                {
+                    delOrders.Transaction = tx;
+                    delOrders.CommandText = delOrdersSql;
+                    var p1 = delOrders.CreateParameter(); p1.ParameterName = "$restaurantId"; p1.Value = restaurantId.Value; delOrders.Parameters.Add(p1);
+                    var p2 = delOrders.CreateParameter(); p2.ParameterName = "$tableNumber"; p2.Value = tableNumber; delOrders.Parameters.Add(p2);
+                    await delOrders.ExecuteNonQueryAsync();
+                }
+            }
+
+            // Delete the access code itself
+            using (var cmd = conn.CreateCommand())
+            {
+                cmd.Transaction = tx;
+                cmd.CommandText = "DELETE FROM AccessCodes WHERE Code = $code;";
+                var p = cmd.CreateParameter(); p.ParameterName = "$code"; p.Value = code; cmd.Parameters.Add(p);
+                var rows = await cmd.ExecuteNonQueryAsync();
+                if (rows == 0)
+                {
+                    tx.Rollback();
+                    return NotFound("Code not found");
+                }
+            }
+
+            tx.Commit();
+            return Ok(new { Message = "Code and associated orders deleted successfully" });
+        }
+        catch (Exception ex)
+        {
+            try { tx.Rollback(); } catch { }
+            return StatusCode(500, ex.Message);
+        }
     }
 
     public class CreateCodeRequest

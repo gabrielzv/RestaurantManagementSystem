@@ -43,6 +43,26 @@ const refreshStatuses = () => {
   }
 };
 
+// Change status message to badge class
+const statusBadgeClass = (msg?: string | null) => {
+  if (!msg) return "status-other";
+  const s = String(msg).toLowerCase();
+  if (s.includes("ready") || s.includes("listo")) return "status-ready";
+  if (s.includes("sent") || s.includes("enviado")) return "status-sent";
+  return "status-other";
+};
+
+const displayStatusText = (msg?: string | null) => {
+  if (!msg) return "Pendiente";
+  const s = String(msg).toLowerCase();
+  if (s.includes("ready") || s.includes("listo")) return "Listo";
+  if (s.includes("sent") || s.includes("enviado")) return "Enviado";
+  if (s.includes("pending") || s.includes("pendiente")) return "Pendiente";
+  // Fallback: capitalize first letter
+  const trimmed = String(msg).trim();
+  return trimmed.charAt(0).toUpperCase() + trimmed.slice(1);
+};
+
 if (!session) {
   router.push({ name: "waiter-login" });
 }
@@ -72,6 +92,17 @@ const generate = async () => {
 
   loading.value = true;
   try {
+    // Clear any previous local session/notifications for this table
+    try {
+      orderSession.remove(session.waiterId || undefined, tableNumber.value);
+    } catch(e) {
+      console.warn("Error clearing order session:", e);
+    }
+    try {
+      notificationService.clear(session.waiterId || undefined, tableNumber.value);
+    } catch(e) {
+      console.warn("Error clearing notifications:", e);
+    }
     const req = {
       restaurantId: session.restaurantId,
       tableNumber: tableNumber.value,
@@ -163,23 +194,25 @@ onActivated(() => {
                   <div
                     v-if="code.tableNumber && statuses[code.tableNumber]"
                     :key="`status-${code.tableNumber}`"
-                    class="name status-badge"
+                    :class="['name', 'status-badge', statusBadgeClass(statuses[code.tableNumber])]"
                   >
-                    Estado: {{ statuses[code.tableNumber] }}
+                    {{ displayStatusText(statuses[code.tableNumber]) }}
                   </div>
                 </transition>
               </div>
             </div>
-            <div class="code-status" :class="code.usedAt ? 'used' : 'generated'">
-              {{ code.usedAt ? "Usado" : "Generado" }}
+            <div class="code-right">
+              <div class="code-status" :class="code.usedAt ? 'used' : 'generated'">
+                {{ code.usedAt ? "Usado" : "Generado" }}
+              </div>
+              <button
+                v-if="code.usedAt && code.tableNumber"
+                @click="attendTable(code.tableNumber, session.waiterId, code.code)"
+                class="attend-btn"
+              >
+                Atender Mesa
+              </button>
             </div>
-            <button
-              v-if="code.usedAt && code.tableNumber"
-              @click="attendTable(code.tableNumber, session.waiterId, code.code)"
-              class="attend-btn"
-            >
-              Atender Mesa
-            </button>
           </li>
         </transition-group>
         <p v-else style="text-align: center; color: #666; margin: 2rem 0">
@@ -271,7 +304,7 @@ button {
 }
 
 button:hover:not(:disabled) {
-  background: #0056b3;
+  background: var(--color-accent);
 }
 
 button:disabled {
@@ -280,7 +313,7 @@ button:disabled {
 }
 
 button.secondary {
-  background: #6c757d;
+  background: #ff0000;
 }
 
 .generated {
@@ -364,10 +397,38 @@ button.secondary {
   color: #856404;
 }
 
+.status-badge {
+  padding: 0.25rem 0.6rem;
+  border-radius: 12px;
+  font-size: 0.85rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  display: inline-block;
+}
+.status-ready {
+  background: #28a745;
+  color: #fff;
+}
+.status-sent {
+  background: #007bff;
+  color: #fff;
+}
+.status-other {
+  background: #6c757d;
+  color: #fff;
+}
+
 .attend-btn {
   background: #28a745;
   padding: 0.4rem 0.8rem;
   font-size: 0.9rem;
+}
+
+.code-right {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.5rem;
 }
 
 /* Responsive styles */

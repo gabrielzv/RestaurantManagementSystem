@@ -70,6 +70,17 @@ const orderStatusClass = (s: string | null) => {
   return "status-other";
 };
 
+// Get human-readable status label in spanish
+const getStatusLabel = (s: string | null) => {
+  if (!s) return "Pendiente";
+  const st = String(s).toLowerCase();
+  if (st === "ready") return "Listo";
+  if (st === "sent") return "Enviado";
+  // fallback: capitalize first letter
+  const trimmed = String(s).trim();
+  return trimmed.charAt(0).toUpperCase() + trimmed.slice(1);
+};
+
 const formatCurrency = (value: number) =>
   new Intl.NumberFormat("es-CR", {
     style: "currency",
@@ -328,10 +339,6 @@ const confirmOrder = async () => {
         );
         if (normalized == "Ready" || normalized == "ready") {
           clearInterval(poll);
-          addOrderNotification("Pedido listo para servir (simulado).", {
-            orderId: currentOrderId.value ?? undefined,
-            tableNumber: tableNumber.value,
-          });
         }
       } catch (e) {
         console.error(e);
@@ -363,6 +370,32 @@ const clearTable = async (options?: { preserveMessage?: boolean }) => {
     await clearAccessCode(accessCode.value);
     try {
       orderSession.remove(waiterId.value || undefined, tableNumber.value);
+      try {
+        // Clear in-memory/local notifications for this waiter+table and global for this table
+        notificationService.clear(waiterId.value || undefined, tableNumber.value);
+      } catch(e) {
+        console.warn("Error clearing notifications:", e);
+      }
+      try {
+        notificationService.clear(undefined, tableNumber.value);
+      } catch(e) {
+        console.warn("Error clearing notifications:", e);
+      }
+      try {
+        // If there's a client access_session in this browser that matches, remove it
+        const as = localStorage.getItem("access_session");
+        if (as) {
+          try {
+            const parsed = JSON.parse(as);
+            if (parsed && parsed.code === accessCode.value)
+              localStorage.removeItem("access_session");
+          } catch(e) {
+            console.warn("Error parsing access_session:", e);
+          }
+        }
+      } catch(e) {
+        console.warn("Error removing access_session:", e);
+      }
     } catch (e) {
       console.warn("orderSession.remove failed", e);
     }
@@ -422,13 +455,41 @@ const billTable = async () => {
 
 const backToPanel = () => router.push({ name: "waiter-panel" });
 
-onMounted(() => {
+onMounted(async () => {
   loadMenu();
   initHub();
   try {
     const s = orderSession.load(waiterId.value || undefined, tableNumber.value);
     const sessionExists = !!s;
     if (s) {
+      // Verify that the server still has orders for this access code.
+      // If the code/table was cleared, remove stale local session.
+      try {
+        const resp = await ordersService.getByAccessCode(accessCode.value);
+        const ordersRaw = Array.isArray(resp?.orders)
+          ? resp.orders
+          : Array.isArray(resp?.Orders)
+            ? resp.Orders
+            : [];
+        if (
+          (!ordersRaw || ordersRaw.length === 0) &&
+          !s.orderId &&
+          (!s.cart || s.cart.length === 0)
+        ) {
+          try {
+            orderSession.remove(waiterId.value || undefined, tableNumber.value);
+            // clear local vars so UI starts fresh
+            currentOrderId.value = null;
+            cart.value = [];
+            orderStatus.value = null;
+            // Mark sessionExists false so notifications are cleared below
+          } catch (e) {
+            console.warn("orderSession.remove failed", e);
+          }
+        }
+      } catch (e) {
+        console.warn("Network error while verifying orders for access code:", e);
+      }
       currentOrderId.value = s.orderId ?? null;
       if (s.cart && Array.isArray(s.cart) && s.cart.length > 0)
         cart.value = s.cart as typeof cart.value;
@@ -582,7 +643,6 @@ onUnmounted(() => {
           <li v-for="notif in clientNotifications" :key="notif.id" class="notification-item">
             <div class="notification-content">
               <p class="name">{{ notif.message }}</p>
-              <small class="name">{{ notif.tableNumber }} • {{ notif.createdAt }}</small>
             </div>
             <button @click="dismissNotification(notif)" class="dismiss-btn">✓</button>
           </li>
@@ -593,7 +653,7 @@ onUnmounted(() => {
       <div class="notifications">
         <h3>Estado</h3>
         <div v-if="orderStatus" :class="['order-status', orderStatusClass(orderStatus)]">
-          Estado: {{ orderStatus }}
+          Estado: {{ getStatusLabel(orderStatus) }}
         </div>
         <p v-else class="no-notifications">No se ha realizado ningún pedido</p>
       </div>
@@ -604,7 +664,6 @@ onUnmounted(() => {
           <li v-for="notif in orderNotifications" :key="notif.id" class="notification-item">
             <div class="notification-content">
               <p class="name">{{ notif.message }}</p>
-              <small class="name">{{ notif.tableNumber || "" }} • {{ notif.createdAt }}</small>
             </div>
           </li>
         </ul>
@@ -916,5 +975,35 @@ button:disabled {
 }
 .status-other {
   background: #6c757d;
+}
+
+.menu,
+.cart {
+  background: #f8f9fa;
+  padding: 1rem;
+  border-radius: 6px;
+  margin-bottom: 1.25rem;
+  box-sizing: border-box;
+}
+
+.menu {
+  padding-left: 0.6rem;
+  padding-right: 0.6rem;
+}
+.cart {
+  padding-left: 0.75rem;
+  padding-right: 0.75rem;
+}
+
+.menu .name,
+.cart .name {
+  text-align: center;
+  margin-bottom: 1rem;
+}
+
+.notifications .order-status {
+  display: block;
+  width: max-content;
+  margin: 0.5rem auto;
 }
 </style>

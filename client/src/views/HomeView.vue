@@ -173,6 +173,34 @@ const checkAccessCode = async () => {
       if (s && s.code) {
         // Try to validate the code again
         await validateAccessCode(s.code);
+
+        // If there are no orders, clear the local access session and receipt state
+        try {
+          const resp = await ordersService.getByAccessCode(s.code);
+          const ordersRaw = Array.isArray(resp?.orders)
+            ? resp.orders
+            : Array.isArray(resp?.Orders)
+              ? resp.Orders
+              : [];
+          if ((!ordersRaw || ordersRaw.length === 0) && receiptOrders.value.length > 0) {
+            // Clear the client-side session and UI
+            try {
+              localStorage.removeItem("access_session");
+            } catch {}
+            try {
+              localStorage.removeItem("restaurant_name");
+              window.dispatchEvent(new CustomEvent("restaurant-name-changed", { detail: null }));
+            } catch {}
+            receiptOrders.value = [];
+            receiptSubtotal.value = 0;
+            hasActiveSession.value = false;
+            alert("Su mesa ha sido desocupada. Por favor ingrese un nuevo código.");
+            router.push({ name: "code" });
+            return;
+          }
+        } catch (e) {
+          console.warn("Error checking orders during access code validation:", e);
+        }
       }
     } catch {
       // Code no longer valid, clear session and redirect
@@ -261,6 +289,28 @@ const loadReceipt = async () => {
 
     receiptOrders.value = normalizedOrders.filter((order) => order.id > 0);
 
+    // Clear local session and UI so the guest doesn't see a past order for a cleared table.
+    try {
+      const serverCount = Array.isArray(ordersRaw) ? ordersRaw.length : 0;
+      if (serverCount === 0 && receiptOrders.value.length > 0) {
+        try {
+          localStorage.removeItem("access_session");
+        } catch {}
+        try {
+          localStorage.removeItem("restaurant_name");
+          window.dispatchEvent(new CustomEvent("restaurant-name-changed", { detail: null }));
+        } catch {}
+        receiptOrders.value = [];
+        receiptSubtotal.value = 0;
+        hasActiveSession.value = false;
+        alert("Su mesa ha sido desocupada. Por favor ingrese un nuevo código.");
+        router.push({ name: "code" });
+        return;
+      }
+    } catch (e) {
+      console.warn("Error during server-empty-orders cleanup check:", e);
+    }
+
     const subtotalRaw = Number(
       data?.subtotal ??
         data?.Subtotal ??
@@ -274,7 +324,30 @@ const loadReceipt = async () => {
 
 let checkInterval: number | undefined;
 
+const onStorage = (e: StorageEvent) => {
+  try {
+    if (e.key === "access_session" && e.newValue === null) {
+      // Clear UI and redirect home (/)
+      try {
+        localStorage.removeItem("access_session");
+      } catch {}
+      try {
+        localStorage.removeItem("restaurant_name");
+        window.dispatchEvent(new CustomEvent("restaurant-name-changed", { detail: null }));
+      } catch {}
+      receiptOrders.value = [];
+      receiptSubtotal.value = 0;
+      hasActiveSession.value = false;
+      alert("Su mesa ha sido desocupada. Por favor ingrese un nuevo código.");
+      router.push({ path: "/" });
+    }
+  } catch (err) {
+    console.warn("storage event handler error", err);
+  }
+};
+
 onMounted(() => {
+  window.addEventListener("storage", onStorage);
   // Check if user has an active session
   const session = localStorage.getItem("access_session");
   hasActiveSession.value = !!session;
@@ -349,6 +422,9 @@ onMounted(() => {
 
 onUnmounted(() => {
   if (checkInterval) window.clearInterval(checkInterval);
+  try {
+    window.removeEventListener("storage", onStorage);
+  } catch {}
 });
 
 /* Computed filtered items based on selected category */
@@ -374,9 +450,14 @@ const filteredItems = computed(() => {
         </button>
         <p v-if="callSuccess" class="call-success">✓ Mesero notificado</p>
       </div>
-      <section v-if="hasActiveSession" class="receipt-card" aria-label="Resumen de pedidos">
+      <section
+        v-if="hasActiveSession"
+        id="mi-pedido"
+        class="receipt-card"
+        aria-label="Resumen de pedidos"
+      >
         <div class="receipt-header">
-          <h2>Tu recibo</h2>
+          <h2>Mi Pedido</h2>
           <span v-if="hasReceipt" class="receipt-subtotal">Subtotal: {{ formattedSubtotal }}</span>
         </div>
         <p v-if="!hasReceipt" class="receipt-empty">Aún no hay pedidos enviados.</p>
@@ -384,7 +465,7 @@ const filteredItems = computed(() => {
           <article v-for="order in receiptOrders" :key="order.id" class="receipt-order">
             <header>
               <div class="receipt-order-info">
-                <strong>Pedido #{{ order.id }}</strong>
+                <strong>Orden #{{ order.id }}</strong>
                 <span v-if="order.createdAt" class="order-time">
                   · {{ formatOrderTime(order.createdAt) }}
                 </span>
@@ -400,25 +481,12 @@ const filteredItems = computed(() => {
               </li>
             </ul>
             <footer>
-              <span>Total del pedido</span>
+              <span>Total del pedido (IVA incluido)</span>
               <span>{{ formatCurrency(order.total) }}</span>
             </footer>
           </article>
         </div>
       </section>
-      <div class="categories">
-        <div class="category-list">
-          <button
-            v-for="cat in categories"
-            :key="cat"
-            :class="['category-btn', { active: selectedCategory === cat }]"
-            @click="selectedCategory = cat"
-          >
-            {{ cat }}
-          </button>
-        </div>
-      </div>
-
       <div v-if="loading" class="loading">Cargando...</div>
 
       <div v-else-if="error" class="error">
@@ -429,80 +497,51 @@ const filteredItems = computed(() => {
         No se encontraron elementos en el menú.
       </div>
 
-      <transition-group name="list" tag="div" v-else class="menu-grid" id="menu">
-        <div v-for="item in filteredItems" :key="item.id" class="menu-item">
-          <div class="thumb-wrap">
-            <img
-              v-if="(item as any).image"
-              :src="(item as any).image"
-              :alt="item.name"
-              class="thumb-img"
-              loading="lazy"
-            />
-            <div v-else class="thumb placeholder" aria-hidden="true"></div>
-
-            <div
-              class="status-badge"
-              :class="{ available: item.isAvailable, unavailable: !item.isAvailable }"
-              :aria-label="item.isAvailable ? 'Disponible' : 'No disponible'"
+      <div v-else id="menu" class="menu-section">
+        <div class="categories">
+          <div class="category-list">
+            <button
+              v-for="cat in categories"
+              :key="cat"
+              :class="['category-btn', { active: selectedCategory === cat }]"
+              @click="selectedCategory = cat"
             >
-              <svg
-                v-if="item.isAvailable"
-                width="14"
-                height="14"
-                viewBox="0 0 24 24"
-                fill="none"
-                xmlns="http://www.w3.org/2000/svg"
-                aria-hidden="true"
-              >
-                <path
-                  d="M20 6L9 17l-5-5"
-                  stroke="currentColor"
-                  stroke-width="2"
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                />
-              </svg>
-              <svg
-                v-else
-                width="14"
-                height="14"
-                viewBox="0 0 24 24"
-                fill="none"
-                xmlns="http://www.w3.org/2000/svg"
-                aria-hidden="true"
-              >
-                <path
-                  d="M18 6L6 18M6 6l12 12"
-                  stroke="currentColor"
-                  stroke-width="2"
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                />
-              </svg>
-              <span class="status-text">{{
-                item.isAvailable ? "Disponible" : "No disponible"
-              }}</span>
-            </div>
-          </div>
-          <div class="content">
-            <h3>{{ item.name }}</h3>
-            <p class="desc">{{ item.description }}</p>
-            <div class="meta">
-              <button
-                class="status add"
-                :class="{ available: item.isAvailable, unavailable: !item.isAvailable }"
-                type="button"
-                aria-label="Agregar"
-                title="Agregar"
-              >
-                Agregar
-              </button>
-              <span class="price">₡{{ item.price.toFixed(2) }}</span>
-            </div>
+              {{ cat }}
+            </button>
           </div>
         </div>
-      </transition-group>
+
+        <transition-group name="list" tag="div" class="menu-grid">
+          <div v-for="item in filteredItems" :key="item.id" class="menu-item">
+            <div class="thumb-wrap">
+              <img
+                v-if="(item as any).image"
+                :src="(item as any).image"
+                :alt="item.name"
+                class="thumb-img"
+                loading="lazy"
+              />
+              <div v-else class="thumb placeholder" aria-hidden="true"></div>
+            </div>
+            <div class="content">
+              <h3>{{ item.name }}</h3>
+              <p class="desc">{{ item.description }}</p>
+              <div class="meta">
+                <button
+                  class="status add"
+                  :class="{ available: item.isAvailable, unavailable: !item.isAvailable }"
+                  type="button"
+                  aria-label="Disponible"
+                  title="Disponible"
+                >
+                  Disponible
+                </button>
+                <span class="price">₡{{ item.price.toFixed(2) }}</span>
+              </div>
+            </div>
+          </div>
+        </transition-group>
+      </div>
     </div>
   </main>
 </template>
@@ -916,6 +955,8 @@ const filteredItems = computed(() => {
   padding: 0.35rem 0.6rem;
   border-radius: 6px;
   display: inline-block;
+  border: none;
+  background-clip: padding-box;
 }
 .status.available {
   background-color: #4caf50;
@@ -924,6 +965,11 @@ const filteredItems = computed(() => {
 .status.unavailable {
   background-color: #f44336;
   color: #fff;
+}
+
+.status:focus {
+  outline: none;
+  box-shadow: none;
 }
 
 /* Responsive styles */
