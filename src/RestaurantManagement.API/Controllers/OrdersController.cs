@@ -51,6 +51,23 @@ public class OrdersController : ControllerBase
         await _context.Database.ExecuteSqlRawAsync(sqlItems);
     }
 
+    private async Task EnsureAccessCodesTableExistsAsync()
+    {
+        var sql = @"CREATE TABLE IF NOT EXISTS AccessCodes (
+            Id INTEGER PRIMARY KEY AUTOINCREMENT,
+            Code TEXT NOT NULL,
+            RestaurantId INTEGER NOT NULL,
+            TableNumber TEXT,
+            WaiterId INTEGER,
+            CreatedAt TEXT NOT NULL,
+            ExpiresAt TEXT,
+            UsedAt TEXT,
+            IsActive INTEGER NOT NULL DEFAULT 1
+        );";
+
+        await _context.Database.ExecuteSqlRawAsync(sql);
+    }
+
     // Create a new order
     [HttpPost]
     public async Task<IActionResult> CreateOrder([FromBody] CreateOrderRequest req)
@@ -312,6 +329,43 @@ public class OrdersController : ControllerBase
         return Ok(new { Order = order, Items = items });
     }
 
+    private sealed class OrderItemSummary
+    {
+        public string Name { get; set; } = string.Empty;
+        public int Quantity { get; set; }
+        public decimal Price { get; set; }
+        public decimal LineTotal { get; set; }
+    }
+
+    private async Task<List<OrderItemSummary>> LoadOrderItemsAsync(DbConnection connection, int orderId)
+    {
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = @"SELECT Id, MenuItemId, Name, Price, Quantity, Notes
+                            FROM OrderItems
+                            WHERE OrderId = $orderId ORDER BY Id;";
+        var p = cmd.CreateParameter(); p.ParameterName = "$orderId"; p.Value = orderId; cmd.Parameters.Add(p);
+
+        using var reader = await cmd.ExecuteReaderAsync();
+        var items = new List<OrderItemSummary>();
+        while (await reader.ReadAsync())
+        {
+            var name = reader.IsDBNull(2) ? "Artículo" : reader.GetString(2);
+            var price = reader.IsDBNull(3) ? 0m : reader.GetDecimal(3);
+            var quantity = reader.IsDBNull(4) ? 0 : reader.GetInt32(4);
+            if (quantity < 0) quantity = 0;
+            var lineTotal = price * quantity;
+            items.Add(new OrderItemSummary
+            {
+                Name = name,
+                Price = price,
+                Quantity = quantity,
+                LineTotal = lineTotal
+            });
+        }
+
+        return items;
+    }
+
     // List orders by waiter
     [HttpGet("bywaiter/{waiterId}")]
     public async Task<IActionResult> GetByWaiter(int waiterId)
@@ -340,6 +394,84 @@ public class OrdersController : ControllerBase
         }
 
         return Ok(list);
+    }
+
+    [HttpGet("byaccesscode/{code}")]
+    public async Task<IActionResult> GetByAccessCode(string code)
+    {
+        if (string.IsNullOrWhiteSpace(code))
+            return BadRequest("Code is required");
+
+        await EnsureTableExistsAsync();
+        await EnsureAccessCodesTableExistsAsync();
+
+        using var conn = _context.Database.GetDbConnection();
+        await conn.OpenAsync();
+
+        int? restaurantId = null;
+        string? tableNumber = null;
+
+        using (var cmd = conn.CreateCommand())
+        {
+            cmd.CommandText = @"SELECT RestaurantId, TableNumber FROM AccessCodes WHERE Code = $code LIMIT 1;";
+            var p = cmd.CreateParameter(); p.ParameterName = "$code"; p.Value = code; cmd.Parameters.Add(p);
+
+            using var reader = await cmd.ExecuteReaderAsync();
+            if (await reader.ReadAsync())
+            {
+                restaurantId = reader.IsDBNull(0) ? (int?)null : reader.GetInt32(0);
+                tableNumber = reader.IsDBNull(1) ? null : reader.GetString(1);
+            }
+        }
+
+        if (!restaurantId.HasValue || string.IsNullOrWhiteSpace(tableNumber))
+        {
+            return Ok(new { Orders = new List<object>(), Subtotal = 0m });
+        }
+
+        var orders = new List<object>();
+        decimal subtotal = 0m;
+
+        using (var ordersCmd = conn.CreateCommand())
+        {
+            ordersCmd.CommandText = @"SELECT Id, Status, CreatedAt
+                                      FROM Orders
+                                      WHERE RestaurantId = $restaurantId
+                                        AND TableNumber = $tableNumber
+                                        AND UPPER(Status) IN ('SENT','READY')
+                                      ORDER BY Id;";
+            var p1 = ordersCmd.CreateParameter(); p1.ParameterName = "$restaurantId"; p1.Value = restaurantId.Value; ordersCmd.Parameters.Add(p1);
+            var p2 = ordersCmd.CreateParameter(); p2.ParameterName = "$tableNumber"; p2.Value = tableNumber; ordersCmd.Parameters.Add(p2);
+
+            using var reader = await ordersCmd.ExecuteReaderAsync();
+            while (await reader.ReadAsync())
+            {
+                var orderId = reader.GetInt32(0);
+                var status = reader.IsDBNull(1) ? null : reader.GetString(1);
+                var createdAt = reader.IsDBNull(2) ? null : reader.GetString(2);
+
+                var items = await LoadOrderItemsAsync(conn, orderId);
+                var orderTotal = items.Sum(i => i.LineTotal);
+                subtotal += orderTotal;
+
+                orders.Add(new
+                {
+                    Id = orderId,
+                    Status = status,
+                    CreatedAt = createdAt,
+                    Total = orderTotal,
+                    Items = items.Select(i => new
+                    {
+                        i.Name,
+                        i.Quantity,
+                        i.Price,
+                        LineTotal = i.LineTotal
+                    }).ToList()
+                });
+            }
+        }
+
+        return Ok(new { Orders = orders, Subtotal = subtotal });
     }
 
     public class CreateOrderRequest

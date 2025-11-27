@@ -5,6 +5,7 @@ import { menuItemService, type MenuItem } from "@/services/api";
 import HeroCarousel from "@/components/HeroCarousel.vue";
 import { getRestaurantById } from "@/services/restaurantsService";
 import { validateAccessCode, notifyWaiter } from "@/services/accessCodeService";
+import { ordersService } from "@/services/ordersService";
 
 const router = useRouter();
 
@@ -19,7 +20,56 @@ const hasActiveSession = ref(false);
 const callingWaiter = ref(false);
 const callSuccess = ref(false);
 
+interface ReceiptItem {
+  name: string;
+  quantity: number;
+  price: number;
+  lineTotal: number;
+}
+
+interface ReceiptOrder {
+  id: number;
+  status: string;
+  createdAt?: string | null;
+  items: ReceiptItem[];
+  total: number;
+}
+
+const receiptOrders = ref<ReceiptOrder[]>([]);
+const receiptSubtotal = ref(0);
+
 const categories = ["Todo el menú", "Entradas", "Platos fuertes", "Bebidas", "Postres"];
+
+const formatCurrency = (value: number) =>
+  new Intl.NumberFormat("es-CR", {
+    style: "currency",
+    currency: "CRC",
+    minimumFractionDigits: 2,
+  }).format(value);
+
+const getStatusLabel = (status: string) => {
+  const normalized = (status || "").toLowerCase();
+  if (normalized === "ready") return "Listo";
+  if (normalized === "sent") return "Enviado";
+  return status || "Pendiente";
+};
+
+const getStatusClass = (status: string) => {
+  const normalized = (status || "").toLowerCase();
+  if (normalized === "ready") return "ready";
+  if (normalized === "sent") return "sent";
+  return "pending";
+};
+
+const formatOrderTime = (value?: string | null) => {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+};
+
+const formattedSubtotal = computed(() => formatCurrency(receiptSubtotal.value));
+const hasReceipt = computed(() => receiptOrders.value.length > 0);
 
 /* Load menu items from the API */
 const loadMenuItems = async () => {
@@ -161,6 +211,67 @@ const callWaiter = async () => {
   }
 };
 
+const loadReceipt = async () => {
+  const session = localStorage.getItem("access_session");
+  if (!session) {
+    receiptOrders.value = [];
+    receiptSubtotal.value = 0;
+    return;
+  }
+
+  try {
+    const parsed = JSON.parse(session);
+    const code = parsed?.code;
+    if (!code) {
+      receiptOrders.value = [];
+      receiptSubtotal.value = 0;
+      return;
+    }
+
+    const data = await ordersService.getByAccessCode(code);
+    const ordersRaw = data?.orders ?? data?.Orders ?? [];
+
+    const normalizedOrders = (ordersRaw as any[]).map((order) => {
+      const itemsSource = order?.items ?? order?.Items ?? [];
+      const items: ReceiptItem[] = (itemsSource as any[]).map((item) => {
+        const price = Number(item?.price ?? item?.Price ?? 0);
+        const quantity = Number(item?.quantity ?? item?.Quantity ?? 0);
+        const line = Number(item?.lineTotal ?? item?.LineTotal ?? price * quantity);
+        return {
+          name: item?.name ?? item?.Name ?? "Artículo",
+          quantity: Number.isFinite(quantity) ? quantity : 0,
+          price: Number.isFinite(price) ? price : 0,
+          lineTotal: Number.isFinite(line)
+            ? line
+            : (Number.isFinite(price) ? price : 0) * (Number.isFinite(quantity) ? quantity : 0),
+        };
+      });
+
+      const fallbackTotal = items.reduce((acc, it) => acc + it.lineTotal, 0);
+      const orderTotal = Number(order?.total ?? order?.Total ?? fallbackTotal);
+
+      return {
+        id: Number(order?.id ?? order?.Id ?? 0),
+        status: order?.status ?? order?.Status ?? "Sent",
+        createdAt: order?.createdAt ?? order?.CreatedAt ?? null,
+        items,
+        total: Number.isFinite(orderTotal) ? orderTotal : fallbackTotal,
+      } as ReceiptOrder;
+    });
+
+    receiptOrders.value = normalizedOrders.filter((order) => order.id > 0);
+
+    const subtotalRaw = Number(
+      data?.subtotal ??
+        data?.Subtotal ??
+        receiptOrders.value.reduce((acc, it) => acc + it.total, 0),
+    );
+    receiptSubtotal.value = Number.isFinite(subtotalRaw) ? subtotalRaw : 0;
+  } catch (err) {
+    console.error("Error loading receipt:", err);
+  }
+};
+
 let checkInterval: number | undefined;
 
 onMounted(() => {
@@ -170,8 +281,13 @@ onMounted(() => {
   loadMenuItems();
   // Check access code validity
   checkAccessCode();
+  loadReceipt();
   // Poll every 5 seconds to check if code still exists
-  checkInterval = window.setInterval(checkAccessCode, 5000);
+  const tick = () => {
+    checkAccessCode();
+    void loadReceipt();
+  };
+  checkInterval = window.setInterval(tick, 5000);
 
   // load session restaurant info if available
   if (session) {
@@ -258,6 +374,38 @@ const filteredItems = computed(() => {
         </button>
         <p v-if="callSuccess" class="call-success">✓ Mesero notificado</p>
       </div>
+      <section v-if="hasActiveSession" class="receipt-card" aria-label="Resumen de pedidos">
+        <div class="receipt-header">
+          <h2>Tu recibo</h2>
+          <span v-if="hasReceipt" class="receipt-subtotal">Subtotal: {{ formattedSubtotal }}</span>
+        </div>
+        <p v-if="!hasReceipt" class="receipt-empty">Aún no hay pedidos enviados.</p>
+        <div v-else class="receipt-orders">
+          <article v-for="order in receiptOrders" :key="order.id" class="receipt-order">
+            <header>
+              <div class="receipt-order-info">
+                <strong>Pedido #{{ order.id }}</strong>
+                <span v-if="order.createdAt" class="order-time">
+                  · {{ formatOrderTime(order.createdAt) }}
+                </span>
+              </div>
+              <span :class="['order-status', getStatusClass(order.status)]">
+                {{ getStatusLabel(order.status) }}
+              </span>
+            </header>
+            <ul>
+              <li v-for="(item, index) in order.items" :key="index" class="receipt-item">
+                <span class="item-name">{{ item.quantity }} × {{ item.name }}</span>
+                <span class="item-total">{{ formatCurrency(item.lineTotal) }}</span>
+              </li>
+            </ul>
+            <footer>
+              <span>Total del pedido</span>
+              <span>{{ formatCurrency(order.total) }}</span>
+            </footer>
+          </article>
+        </div>
+      </section>
       <div class="categories">
         <div class="category-list">
           <button
@@ -402,6 +550,153 @@ const filteredItems = computed(() => {
   font-weight: 600;
   margin-top: 0.5rem;
   animation: fadeIn 0.3s ease;
+}
+
+.receipt-card {
+  background: #fff7ec;
+  border: 1px solid rgba(255, 152, 0, 0.25);
+  border-radius: 12px;
+  padding: 1.5rem;
+  margin-bottom: 2rem;
+  box-shadow: 0 12px 30px rgba(255, 152, 0, 0.08);
+}
+
+.receipt-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}
+
+.receipt-header h2 {
+  margin: 0;
+  font-size: 1.4rem;
+  color: #ff6f00;
+}
+
+.receipt-subtotal {
+  font-weight: 700;
+  color: #e65100;
+}
+
+.receipt-empty {
+  text-align: center;
+  color: #666;
+  font-style: italic;
+  margin: 0;
+}
+
+.receipt-orders {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.receipt-order {
+  background: #ffffff;
+  border-radius: 10px;
+  padding: 1rem;
+  border: 1px solid rgba(255, 152, 0, 0.15);
+  box-shadow: 0 4px 16px rgba(255, 152, 0, 0.1);
+}
+
+.receipt-order header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 0.75rem;
+}
+
+.receipt-order-info {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: #333;
+}
+
+.order-time {
+  color: #999;
+  font-size: 0.9rem;
+}
+
+.order-status {
+  font-size: 0.85rem;
+  font-weight: 600;
+  padding: 0.35rem 0.7rem;
+  border-radius: 999px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.order-status.sent {
+  background: rgba(33, 150, 243, 0.12);
+  color: #1976d2;
+}
+
+.order-status.ready {
+  background: rgba(76, 175, 80, 0.15);
+  color: #2e7d32;
+}
+
+.order-status.pending {
+  background: rgba(158, 158, 158, 0.2);
+  color: #424242;
+}
+
+.receipt-order ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.receipt-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 0.95rem;
+  color: #333;
+}
+
+.receipt-item .item-name {
+  font-weight: 500;
+}
+
+.receipt-item .item-total {
+  font-weight: 600;
+}
+
+.receipt-order footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 0.75rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid rgba(0, 0, 0, 0.08);
+  font-weight: 600;
+  color: #2e7d32;
+}
+
+@media (max-width: 640px) {
+  .receipt-header {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .receipt-order header {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .receipt-order footer {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.25rem;
+  }
 }
 
 @keyframes fadeIn {

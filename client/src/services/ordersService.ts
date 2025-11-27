@@ -34,6 +34,11 @@ export const ordersService = {
     return resp.data;
   },
 
+  async getByAccessCode(accessCode: string) {
+    const resp = await api.get(`/orders/byaccesscode/${encodeURIComponent(accessCode)}`);
+    return resp.data;
+  },
+
   async getByWaiter(waiterId: number) {
     const resp = await api.get(`/orders/bywaiter/${waiterId}`);
     return resp.data;
