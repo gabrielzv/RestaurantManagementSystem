@@ -39,11 +39,13 @@ const submit = async () => {
 </script>
 
 <template>
-  <main>
-    <div class="center">
+  <main class="center">
+    <div class="panel-card">
       <h1>Ingrese el código para ver el menú</h1>
 
-      <input v-model="code" maxlength="4" placeholder="0000" />
+      <div class="input-group">
+        <input v-model="code" maxlength="4" placeholder="0000" />
+      </div>
 
       <div class="actions">
         <button @click="submit" :disabled="loading">Entrar</button>
@@ -62,26 +64,66 @@ const submit = async () => {
 <style scoped>
 .center {
   display: flex;
-  flex-direction: column;
-  align-items: center;
   justify-content: center;
-  height: 80vh;
+  align-items: center;
+  min-height: 80vh;
+  padding: 2rem 1rem;
+  box-sizing: border-box;
+}
+
+.panel-card {
+  background: white;
+  padding: 2rem;
+  border-radius: 8px;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+  width: 100%;
+  max-width: 420px;
+  box-sizing: border-box;
+}
+
+.panel-card h1 {
+  text-align: center;
+  margin-bottom: 1.25rem;
+  color: #333;
+}
+
+.input-group {
+  display: flex;
+  justify-content: center;
+  margin-bottom: 0.75rem;
 }
 
 input {
   font-size: 2rem;
   text-align: center;
   width: 8rem;
+  min-width: 120px;
+  max-width: 100%;
   padding: 0.5rem;
-  background-color: #333;
-  color: white;
-  border: 2px solid #555;
-  border-radius: 4px;
+  background-color: #fff;
+  color: #111;
+  border: 1px solid #ddd;
+  border-radius: 6px;
+  box-sizing: border-box;
+  margin-bottom: 0.5rem;
 }
 
 .actions button {
   padding: 0.75rem 1.5rem;
   font-size: 1rem;
+  border-radius: 6px;
+  cursor: pointer;
+  background: #007bff;
+  color: #fff;
+  border: none;
+}
+
+.actions {
+  display: flex;
+  gap: 1rem;
+  align-items: center;
+  justify-content: center;
+  margin-top: 0.25rem;
 }
 
 .error {
@@ -90,14 +132,14 @@ input {
 }
 
 .waiter-section {
-  margin-top: 3rem;
+  margin-top: 1.5rem;
   text-align: center;
-  padding: 1.5rem;
-  border-top: 1px solid #444;
+  padding-top: 0.75rem;
+  border-top: 1px solid #eee;
 }
 
 .waiter-text {
-  color: #aaa;
+  color: #000000;
   font-size: 0.95rem;
   margin-bottom: 0.75rem;
 }
@@ -117,5 +159,35 @@ input {
 .waiter-link:hover {
   background-color: var(--color-accent);
   color: white;
+}
+
+/* Responsive tweaks */
+@media (max-width: 720px) {
+  .center h1 {
+    font-size: 1.25rem;
+    text-align: center;
+  }
+
+  input {
+    font-size: 1.6rem;
+    width: 60%;
+  }
+
+  .actions button {
+    width: auto;
+    padding: 0.6rem 1.25rem;
+    font-size: 0.95rem;
+  }
+
+  .center {
+    min-height: 50vh;
+    padding: 1.5rem 1rem;
+  }
+}
+
+@media (max-width: 420px) {
+  input {
+    width: 72%;
+  }
 }
 </style>

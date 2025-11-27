@@ -54,8 +54,14 @@ const goTo = (i: number) => {
   current.value = i % slides.length;
 };
 
+// Scroll to sections
 const scrollToMenu = () => {
   const el = document.getElementById("menu");
+  if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
+};
+
+const scrollToOrder = () => {
+  const el = document.getElementById("mi-pedido");
   if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
 };
 
@@ -104,7 +110,7 @@ onUnmounted(() => stop());
             <p class="lead">{{ slide.lead }}</p>
             <div class="actions">
               <button class="btn primary" @click="scrollToMenu" type="button">Ver menú</button>
-              <button class="btn ghost" type="button" aria-disabled="true">Iniciar sesión</button>
+              <button class="btn primary" type="button" @click="scrollToOrder">Mi Pedido</button>
             </div>
           </div>
         </div>
@@ -153,7 +159,9 @@ onUnmounted(() => stop());
   background-size: cover;
   background-position: center center;
   transform: translateX(100%);
-  transition: transform 480ms cubic-bezier(0.22, 0.9, 0.2, 1), opacity 480ms ease;
+  transition:
+    transform 480ms cubic-bezier(0.22, 0.9, 0.2, 1),
+    opacity 480ms ease;
   opacity: 0;
   display: flex;
   align-items: center;
