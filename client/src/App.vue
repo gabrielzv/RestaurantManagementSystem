@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onBeforeUnmount } from "vue";
-import { RouterLink, RouterView, useRoute, type RouteMeta } from "vue-router";
+import { RouterView, useRoute, type RouteMeta } from "vue-router";
 
 const navOpen = ref(false);
 const route = useRoute();
@@ -81,11 +81,6 @@ onMounted(() => {
         <span></span>
         <span></span>
       </button>
-
-      <nav class="site-nav" :class="{ open: navOpen }">
-        <RouterLink to="/" @click="navOpen = false">Menú</RouterLink>
-        <RouterLink to="/about" @click="navOpen = false">Sobre nosotros</RouterLink>
-      </nav>
     </div>
   </header>
 
