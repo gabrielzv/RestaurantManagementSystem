@@ -237,4 +237,211 @@ public class US02_OrdersTests : IDisposable
         var replaceRes = await controller.ReplaceItems(newId, new[] { new OrdersController.OrderItemRequest { Name = "Z", Price = 1m, Quantity = 1 } });
         Assert.IsType<BadRequestObjectResult>(replaceRes);
     }
+
+    [Fact]
+    public async Task GetByWaiter_Returns_Orders_For_Waiter()
+    {
+        var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string> { ["ConnectionStrings:DefaultConnection"] = $"DataSource={_dbPath}" }).Build();
+        var hub = new FakeHubContext();
+        var controller = new OrdersController(_context, config, hub);
+
+        // Create an order with waiter
+        var req = new OrdersController.CreateOrderRequest
+        {
+            RestaurantId = 1,
+            WaiterId = 123,
+            TableNumber = "T1",
+            Items = new[] { new OrdersController.OrderItemRequest { Name = "Pizza", Price = 10m, Quantity = 1 } }
+        };
+
+        var createResult = await controller.CreateOrder(req);
+        Assert.IsType<OkObjectResult>(createResult);
+        var okCreate = createResult as OkObjectResult;
+        Assert.NotNull(okCreate?.Value);
+        var idProp = okCreate.Value as dynamic;
+        Assert.NotNull(idProp);
+        var newId = Convert.ToInt32(idProp.Id);
+
+        // Get by waiter
+        var getResult = await controller.GetByWaiter(123);
+        Assert.IsType<OkObjectResult>(getResult);
+        var ok = getResult as OkObjectResult;
+        Assert.NotNull(ok?.Value);
+        var list = ok.Value as IEnumerable<dynamic>;
+        Assert.NotNull(list);
+        Assert.Single(list);
+        var order = list.First();
+        Assert.Equal(newId, (int)order.Id);
+        Assert.Equal(123, (int)order.WaiterId);
+    }
+
+    [Fact]
+    public async Task ConfirmOrder_Returns_NotFound_For_NonExistent_Order()
+    {
+        var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string> { ["ConnectionStrings:DefaultConnection"] = $"DataSource={_dbPath}" }).Build();
+        var hub = new FakeHubContext();
+        var controller = new OrdersController(_context, config, hub);
+
+        var result = await controller.ConfirmOrder(999);
+        Assert.IsType<NotFoundResult>(result);
+    }
+
+    [Fact]
+    public async Task CreateOrder_Returns_BadRequest_For_Invalid_RestaurantId()
+    {
+        var config = BuildConfig();
+        var hub = BuildFakeHubContext();
+        var controller = new OrdersController(_context, config, hub);
+
+        var req = new OrdersController.CreateOrderRequest
+        {
+            RestaurantId = 0,
+            TableNumber = "T1",
+            Items = new[] { new OrdersController.OrderItemRequest { Name = "Pizza", Price = 10m, Quantity = 1 } }
+        };
+
+        var result = await controller.CreateOrder(req);
+        Assert.IsType<BadRequestObjectResult>(result);
+    }
+
+    [Fact]
+    public async Task GetOrder_Returns_NotFound_For_Invalid_Id()
+    {
+        var config = BuildConfig();
+        var hub = BuildFakeHubContext();
+        var controller = new OrdersController(_context, config, hub);
+
+        var result = await controller.GetOrder(0);
+        Assert.IsType<NotFoundResult>(result);
+    }
+
+    [Fact]
+    public async Task ConfirmOrder_Returns_NotFound_For_Invalid_Id()
+    {
+        var config = BuildConfig();
+        var hub = BuildFakeHubContext();
+        var controller = new OrdersController(_context, config, hub);
+
+        var result = await controller.ConfirmOrder(0);
+        Assert.IsType<NotFoundResult>(result);
+    }
+
+    [Fact]
+    public async Task GetByWaiter_Returns_Empty_For_Invalid_WaiterId()
+    {
+        var config = BuildConfig();
+        var hub = BuildFakeHubContext();
+        var controller = new OrdersController(_context, config, hub);
+
+        var result = await controller.GetByWaiter(0);
+        Assert.IsType<OkObjectResult>(result);
+        var ok = result as OkObjectResult;
+        var list = ok!.Value as IEnumerable<dynamic>;
+        Assert.Empty(list);
+    }
+
+    [Fact]
+    public async Task GetByAccessCode_Returns_BadRequest_For_Null_Code()
+    {
+        var config = BuildConfig();
+        var hub = BuildFakeHubContext();
+        var controller = new OrdersController(_context, config, hub);
+
+        var result = await controller.GetByAccessCode(null);
+        Assert.IsType<BadRequestObjectResult>(result);
+    }
+
+    [Fact]
+    public async Task GetOrder_Returns_NotFound_For_NonExistent_Order()
+    {
+        var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string> { ["ConnectionStrings:DefaultConnection"] = $"DataSource={_dbPath}" }).Build();
+        var hub = new FakeHubContext();
+        var controller = new OrdersController(_context, config, hub);
+
+        var result = await controller.GetOrder(999);
+        Assert.IsType<NotFoundResult>(result);
+    }
+
+    [Fact]
+    public async Task GetByAccessCode_Returns_Orders_For_Valid_Code()
+    {
+        var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string> { ["ConnectionStrings:DefaultConnection"] = $"DataSource={_dbPath}" }).Build();
+        var hub = new FakeHubContext();
+        var controller = new OrdersController(_context, config, hub);
+
+        // Ensure AccessCodes table exists
+        using var conn = _context.Database.GetDbConnection();
+        await conn.OpenAsync();
+        using var createCmd = conn.CreateCommand();
+        createCmd.CommandText = @"CREATE TABLE IF NOT EXISTS AccessCodes (
+            Id INTEGER PRIMARY KEY AUTOINCREMENT,
+            Code TEXT NOT NULL,
+            RestaurantId INTEGER NOT NULL,
+            TableNumber TEXT,
+            WaiterId INTEGER,
+            CreatedAt TEXT NOT NULL,
+            ExpiresAt TEXT,
+            UsedAt TEXT,
+            IsActive INTEGER NOT NULL DEFAULT 1
+        );";
+        await createCmd.ExecuteNonQueryAsync();
+
+        // Create access code
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = @"INSERT INTO AccessCodes (Code, RestaurantId, TableNumber, WaiterId, CreatedAt, IsActive) VALUES ($code, $restaurantId, $tableNumber, $waiterId, $createdAt, 1);";
+        var p = cmd.CreateParameter(); p.ParameterName = "$code"; p.Value = "TESTCODE"; cmd.Parameters.Add(p);
+        p = cmd.CreateParameter(); p.ParameterName = "$restaurantId"; p.Value = 1; cmd.Parameters.Add(p);
+        p = cmd.CreateParameter(); p.ParameterName = "$tableNumber"; p.Value = "T1"; cmd.Parameters.Add(p);
+        p = cmd.CreateParameter(); p.ParameterName = "$waiterId"; p.Value = 5; cmd.Parameters.Add(p);
+        p = cmd.CreateParameter(); p.ParameterName = "$createdAt"; p.Value = DateTime.UtcNow.ToString("o"); cmd.Parameters.Add(p);
+        await cmd.ExecuteNonQueryAsync();
+
+        // Create order for that table
+        var req = new OrdersController.CreateOrderRequest
+        {
+            RestaurantId = 1,
+            TableNumber = "T1",
+            WaiterId = 5,
+            Items = new[] { new OrdersController.OrderItemRequest { Name = "Burger", Price = 15m, Quantity = 1 } }
+        };
+        var createResult = await controller.CreateOrder(req);
+        Assert.IsType<OkObjectResult>(createResult);
+        var okCreate = createResult as OkObjectResult;
+        var idProp = okCreate!.Value!.GetType().GetProperty("Id");
+        var orderId = Convert.ToInt32(idProp!.GetValue(okCreate.Value));
+
+        // Confirm order to make it Sent
+        var confirmResult = await controller.ConfirmOrder(orderId);
+        Assert.IsType<OkObjectResult>(confirmResult);
+
+        // Get by access code
+        var getResult = await controller.GetByAccessCode("TESTCODE");
+        Assert.IsType<OkObjectResult>(getResult);
+        var ok = getResult as OkObjectResult;
+        Assert.NotNull(ok?.Value);
+        var ordersProp = ok.Value.GetType().GetProperty("Orders")?.GetValue(ok.Value) as IEnumerable<dynamic>;
+        Assert.NotNull(ordersProp);
+        Assert.Single(ordersProp);
+        var order = ordersProp.First();
+        Assert.Equal(orderId, (int)order.Id);
+        Assert.Equal(15m, (decimal)order.Total);
+    }
+
+    [Fact]
+    public async Task GetByAccessCode_Returns_Empty_For_Invalid_Code()
+    {
+        var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string> { ["ConnectionStrings:DefaultConnection"] = $"DataSource={_dbPath}" }).Build();
+        var hub = new FakeHubContext();
+        var controller = new OrdersController(_context, config, hub);
+
+        var result = await controller.GetByAccessCode("INVALID");
+        Assert.IsType<OkObjectResult>(result);
+        var ok = result as OkObjectResult;
+        Assert.NotNull(ok?.Value);
+        var orders = ok.Value.GetType().GetProperty("Orders")?.GetValue(ok.Value) as IEnumerable<dynamic>;
+        Assert.NotNull(orders);
+        Assert.Empty(orders);
+        var subtotal = ok.Value.GetType().GetProperty("Subtotal")?.GetValue(ok.Value) as decimal?;
+        Assert.Equal(0m, subtotal);
+    }
 }

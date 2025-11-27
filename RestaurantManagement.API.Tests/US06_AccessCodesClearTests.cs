@@ -10,6 +10,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Collections.Generic;
 using Xunit;
+using Moq;
 
 namespace RestaurantManagement.API.Tests;
 
@@ -150,5 +151,147 @@ public class US12_AccessCodesClearTests : IDisposable
         var accessController = new AccessCodesController(_context);
         var res = await accessController.ClearCode("ZZZZ");
         Assert.IsType<NotFoundObjectResult>(res);
+    }
+
+    public class OrderHubTests
+    {
+        [Fact]
+        public async Task JoinGroup_ShouldAddConnectionToGroup_WhenWaiterIdIsValid()
+        {
+            // Arrange
+            var mockGroups = new Mock<IGroupManager>();
+            var connectionId = "conn1";
+            var waiterId = "123";
+            mockGroups.Setup(g => g.AddToGroupAsync(connectionId, waiterId, It.IsAny<CancellationToken>())).Returns(Task.CompletedTask).Verifiable();
+
+            var mockContext = new Mock<HubCallerContext>();
+            mockContext.Setup(c => c.ConnectionId).Returns(connectionId);
+
+            var hub = new OrderHub();
+            typeof(Hub).GetProperty("Context")!.SetValue(hub, mockContext.Object);
+            typeof(Hub).GetProperty("Groups")!.SetValue(hub, mockGroups.Object);
+
+            // Act
+            await hub.JoinGroup(waiterId);
+
+            // Assert
+            mockGroups.Verify(g => g.AddToGroupAsync(connectionId, waiterId, It.IsAny<CancellationToken>()), Times.Once);
+        }
+
+        [Fact]
+        public async Task LeaveGroup_ShouldRemoveConnectionFromGroup_WhenWaiterIdIsValid()
+        {
+            // Arrange
+            var mockGroups = new Mock<IGroupManager>();
+            var connectionId = "conn2";
+            var waiterId = "456";
+            mockGroups.Setup(g => g.RemoveFromGroupAsync(connectionId, waiterId, It.IsAny<CancellationToken>())).Returns(Task.CompletedTask).Verifiable();
+
+            var mockContext = new Mock<HubCallerContext>();
+            mockContext.Setup(c => c.ConnectionId).Returns(connectionId);
+
+            var hub = new OrderHub();
+            typeof(Hub).GetProperty("Context")!.SetValue(hub, mockContext.Object);
+            typeof(Hub).GetProperty("Groups")!.SetValue(hub, mockGroups.Object);
+
+            // Act
+            await hub.LeaveGroup(waiterId);
+
+            // Assert
+            mockGroups.Verify(g => g.RemoveFromGroupAsync(connectionId, waiterId, It.IsAny<CancellationToken>()), Times.Once);
+        }
+
+        [Fact]
+        public async Task CreateCode_Returns_BadRequest_For_Invalid_RestaurantId()
+        {
+            var options = new DbContextOptionsBuilder<ApplicationDbContext>()
+                .UseSqlite($"DataSource=:memory:")
+                .Options;
+            using var context = new ApplicationDbContext(options);
+            context.Database.OpenConnection();
+            context.Database.EnsureCreated();
+            var controller = new AccessCodesController(context);
+
+            var request = new AccessCodesController.CreateCodeRequest
+            {
+                RestaurantId = 0,
+                TableNumber = "T1",
+                WaiterId = 1
+            };
+
+            var result = await controller.CreateCode(request);
+            Assert.IsType<BadRequestObjectResult>(result);
+        }
+
+        [Fact]
+        public async Task ValidateCode_Returns_BadRequest_For_Empty_Code()
+        {
+            var options = new DbContextOptionsBuilder<ApplicationDbContext>()
+                .UseSqlite($"DataSource=:memory:")
+                .Options;
+            using var context = new ApplicationDbContext(options);
+            context.Database.OpenConnection();
+            context.Database.EnsureCreated();
+            var controller = new AccessCodesController(context);
+
+            var result = await controller.ValidateCode(string.Empty);
+            Assert.IsType<BadRequestObjectResult>(result);
+        }
+
+        [Fact]
+        public async Task NotifyWaiter_Returns_BadRequest_For_Empty_AccessCode()
+        {
+            var options = new DbContextOptionsBuilder<ApplicationDbContext>()
+                .UseSqlite($"DataSource=:memory:")
+                .Options;
+            using var context = new ApplicationDbContext(options);
+            context.Database.OpenConnection();
+            context.Database.EnsureCreated();
+            var controller = new AccessCodesController(context);
+
+            var request = new AccessCodesController.NotifyWaiterRequest { AccessCode = string.Empty };
+            var result = await controller.NotifyWaiter(request);
+            Assert.IsType<BadRequestObjectResult>(result);
+        }
+
+        [Fact]
+        public async Task ValidateCode_Returns_BadRequest_For_Expired_Code()
+        {
+            var dbPath = Path.GetTempFileName();
+            var options = new DbContextOptionsBuilder<ApplicationDbContext>()
+                .UseSqlite($"DataSource={dbPath}")
+                .Options;
+            using var context = new ApplicationDbContext(options);
+            context.Database.EnsureCreated();
+            var controller = new AccessCodesController(context);
+
+            // Insert an expired code directly
+            var expiredTime = DateTime.UtcNow.AddMinutes(-1).ToString("o");
+            using var conn = context.Database.GetDbConnection();
+            await conn.OpenAsync();
+            using var createCmd = conn.CreateCommand();
+            createCmd.CommandText = @"CREATE TABLE IF NOT EXISTS AccessCodes (
+                Id INTEGER PRIMARY KEY AUTOINCREMENT,
+                Code TEXT NOT NULL,
+                RestaurantId INTEGER NOT NULL,
+                TableNumber TEXT,
+                WaiterId INTEGER,
+                CreatedAt TEXT NOT NULL,
+                ExpiresAt TEXT,
+                UsedAt TEXT,
+                IsActive INTEGER NOT NULL DEFAULT 1
+            );";
+            await createCmd.ExecuteNonQueryAsync();
+
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = @"INSERT INTO AccessCodes (Code, RestaurantId, TableNumber, CreatedAt, ExpiresAt, IsActive)
+                                VALUES ('EXPIRED', 1, 'T1', $created, $expires, 1);";
+            var p = cmd.CreateParameter(); p.ParameterName = "$created"; p.Value = DateTime.UtcNow.ToString("o"); cmd.Parameters.Add(p);
+            p = cmd.CreateParameter(); p.ParameterName = "$expires"; p.Value = expiredTime; cmd.Parameters.Add(p);
+            await cmd.ExecuteNonQueryAsync();
+
+            var result = await controller.ValidateCode("EXPIRED");
+            Assert.IsType<BadRequestObjectResult>(result);
+        }
     }
 }

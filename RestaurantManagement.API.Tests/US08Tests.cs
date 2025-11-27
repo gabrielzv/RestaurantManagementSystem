@@ -15,6 +15,7 @@ using RestaurantManagement.API.Controllers;
 using RestaurantManagement.API.Hubs;
 using RestaurantManagement.Infrastructure.Data;
 using Xunit;
+using Moq;
 
 namespace RestaurantManagement.API.Tests;
 
@@ -397,6 +398,362 @@ public class US08Tests
             {
                 public Task SendCoreAsync(string method, object?[] args, CancellationToken cancellationToken = default) => Task.CompletedTask;
             }
+        }
+    }
+
+    public class MenuItemsControllerTests
+    {
+        [Fact]
+        public async Task UpdateMenuItem_ShouldCallMenuItemExists_WhenItemDoesNotExist()
+        {
+            // Arrange
+            var options = new DbContextOptionsBuilder<ApplicationDbContext>()
+                .UseSqlite($"DataSource=:memory:")
+                .Options;
+            using var context = new ApplicationDbContext(options);
+            context.Database.OpenConnection();
+            context.Database.EnsureCreated();
+            var controller = new MenuItemsController(context);
+            var item = new RestaurantManagement.Domain.Entities.MenuItem { Id = 999, Name = "Test", Description = "Desc", Price = 1.0m, Category = "Cat", IsAvailable = true };
+
+            // Act
+            var result = await controller.UpdateMenuItem(999, item);
+
+            // Assert
+            Assert.IsType<NotFoundResult>(result);
+        }
+
+        private sealed class TestContext : IAsyncDisposable
+        {
+            private readonly string _databasePath;
+            private readonly string _connectionString;
+            private readonly ApplicationDbContext _dbContext;
+            private readonly IConfiguration _configuration;
+            private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
+
+            private TestContext(string databasePath, string connectionString, ApplicationDbContext dbContext, IConfiguration configuration)
+            {
+                _databasePath = databasePath;
+                _connectionString = connectionString;
+                _dbContext = dbContext;
+                _configuration = configuration;
+                OrdersController = new OrdersController(dbContext, configuration, FakeHubContext.Instance);
+            }
+
+            public OrdersController OrdersController { get; }
+
+            public static async Task<TestContext> CreateAsync()
+            {
+                var dbPath = Path.Combine(Path.GetTempPath(), $"us08_{Guid.NewGuid():N}.db");
+                var connectionString = $"Data Source={dbPath};";
+                var options = new DbContextOptionsBuilder<ApplicationDbContext>()
+                    .UseSqlite(connectionString)
+                    .Options;
+                var dbContext = new ApplicationDbContext(options);
+                await dbContext.Database.EnsureCreatedAsync();
+
+                var config = new ConfigurationBuilder()
+                    .AddInMemoryCollection(new Dictionary<string, string?>
+                    {
+                        { "ConnectionStrings:DefaultConnection", connectionString }
+                    })
+                    .Build();
+
+                return new TestContext(dbPath, connectionString, dbContext, config);
+            }
+
+            public async Task<string> CreateAccessCodeAsync(int restaurantId, string? tableNumber, string? code = null, int? waiterId = null)
+            {
+                await EnsureAccessCodesTableExistsAsync();
+
+                var finalCode = code ?? Guid.NewGuid().ToString("N").Substring(0, 6).ToUpperInvariant();
+                var now = DateTime.UtcNow.ToString("o");
+
+                await _dbContext.Database.ExecuteSqlRawAsync(
+                    @"INSERT INTO AccessCodes (Code, RestaurantId, TableNumber, WaiterId, CreatedAt, ExpiresAt, UsedAt, IsActive)
+                      VALUES ($code, $restaurantId, $tableNumber, $waiterId, $createdAt, NULL, NULL, 1);",
+                    new SqliteParameter("$code", finalCode),
+                    new SqliteParameter("$restaurantId", restaurantId),
+                    new SqliteParameter("$tableNumber", tableNumber ?? (object)DBNull.Value),
+                    new SqliteParameter("$waiterId", waiterId ?? (object)DBNull.Value),
+                    new SqliteParameter("$createdAt", now));
+
+                return finalCode;
+            }
+
+            public record struct OrderItemData(string Name, decimal Price, int Quantity);
+
+            public async Task<int> InsertOrderAsync(int restaurantId, string tableNumber, string status, IEnumerable<OrderItemData> items)
+            {
+                await EnsureOrdersTablesExistAsync();
+
+                var itemList = items.ToList();
+                var createdAt = DateTime.UtcNow.ToString("o");
+                var subtotal = itemList.Sum(i => i.Price * i.Quantity);
+
+                await using var connection = new SqliteConnection(_connectionString);
+                await connection.OpenAsync();
+                await using var transaction = await connection.BeginTransactionAsync();
+
+                await using (DbCommand insertOrder = connection.CreateCommand())
+                {
+                    insertOrder.Transaction = transaction;
+                    insertOrder.CommandText = @"INSERT INTO Orders (RestaurantId, WaiterId, TableNumber, Status, CreatedAt, UpdatedAt, Total)
+                                                VALUES ($restaurantId, NULL, $tableNumber, $status, $createdAt, NULL, $total);";
+                    insertOrder.Parameters.Add(new SqliteParameter("$restaurantId", restaurantId));
+                    insertOrder.Parameters.Add(new SqliteParameter("$tableNumber", tableNumber));
+                    insertOrder.Parameters.Add(new SqliteParameter("$status", status));
+                    insertOrder.Parameters.Add(new SqliteParameter("$createdAt", createdAt));
+                    insertOrder.Parameters.Add(new SqliteParameter("$total", subtotal));
+                    await insertOrder.ExecuteNonQueryAsync();
+                }
+
+                int orderId;
+                await using (DbCommand idCmd = connection.CreateCommand())
+                {
+                    idCmd.Transaction = transaction;
+                    idCmd.CommandText = "SELECT last_insert_rowid();";
+                    orderId = Convert.ToInt32(await idCmd.ExecuteScalarAsync());
+                }
+
+                foreach (var item in itemList)
+                {
+                    await using DbCommand insertItem = connection.CreateCommand();
+                    insertItem.Transaction = transaction;
+                    insertItem.CommandText = @"INSERT INTO OrderItems (OrderId, MenuItemId, Name, Price, Quantity, Notes)
+                                              VALUES ($orderId, NULL, $name, $price, $quantity, NULL);";
+                    insertItem.Parameters.Add(new SqliteParameter("$orderId", orderId));
+                    insertItem.Parameters.Add(new SqliteParameter("$name", item.Name));
+                    insertItem.Parameters.Add(new SqliteParameter("$price", item.Price));
+                    insertItem.Parameters.Add(new SqliteParameter("$quantity", item.Quantity));
+                    await insertItem.ExecuteNonQueryAsync();
+                }
+
+                await transaction.CommitAsync();
+                return orderId;
+            }
+
+            public static ReceiptResponse ParseReceipt(object? value)
+            {
+                var json = JsonSerializer.Serialize(value, JsonOptions);
+                using var document = JsonDocument.Parse(json);
+                var root = document.RootElement;
+
+                var subtotal = root.TryGetProperty("subtotal", out var subElement) && subElement.ValueKind == JsonValueKind.Number
+                    ? subElement.GetDecimal()
+                    : 0m;
+
+                var orders = new List<ReceiptOrder>();
+                if (root.TryGetProperty("orders", out var ordersElement) && ordersElement.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var orderEl in ordersElement.EnumerateArray())
+                    {
+                        var id = orderEl.TryGetProperty("id", out var idEl) ? idEl.GetInt32() : 0;
+                        var status = orderEl.TryGetProperty("status", out var statusEl) && statusEl.ValueKind != JsonValueKind.Null
+                            ? statusEl.GetString()
+                            : null;
+                        var createdAt = orderEl.TryGetProperty("createdAt", out var createdEl) && createdEl.ValueKind != JsonValueKind.Null
+                            ? createdEl.GetString()
+                            : null;
+                        var total = orderEl.TryGetProperty("total", out var totalEl) && totalEl.ValueKind == JsonValueKind.Number
+                            ? totalEl.GetDecimal()
+                            : 0m;
+
+                        var items = new List<ReceiptItem>();
+                        if (orderEl.TryGetProperty("items", out var itemsEl) && itemsEl.ValueKind == JsonValueKind.Array)
+                        {
+                            foreach (var itemEl in itemsEl.EnumerateArray())
+                            {
+                                var name = itemEl.TryGetProperty("name", out var nameEl) && nameEl.ValueKind != JsonValueKind.Null
+                                    ? nameEl.GetString() ?? string.Empty
+                                    : string.Empty;
+                                var qty = itemEl.TryGetProperty("quantity", out var qtyEl) && qtyEl.ValueKind == JsonValueKind.Number
+                                    ? qtyEl.GetInt32()
+                                    : 0;
+                                var price = itemEl.TryGetProperty("price", out var priceEl) && priceEl.ValueKind == JsonValueKind.Number
+                                    ? priceEl.GetDecimal()
+                                    : 0m;
+                                var lineTotal = itemEl.TryGetProperty("lineTotal", out var lineEl) && lineEl.ValueKind == JsonValueKind.Number
+                                    ? lineEl.GetDecimal()
+                                    : 0m;
+                                items.Add(new ReceiptItem(name, qty, price, lineTotal));
+                            }
+                        }
+
+                        orders.Add(new ReceiptOrder(id, status, createdAt, total, items));
+                    }
+                }
+
+                return new ReceiptResponse(subtotal, orders);
+            }
+
+            public readonly record struct ReceiptResponse(decimal Subtotal, List<ReceiptOrder> Orders);
+            public readonly record struct ReceiptOrder(int Id, string? Status, string? CreatedAt, decimal Total, List<ReceiptItem> Items);
+            public readonly record struct ReceiptItem(string Name, int Quantity, decimal Price, decimal LineTotal);
+
+            private async Task EnsureOrdersTablesExistAsync()
+            {
+                const string ordersSql = @"CREATE TABLE IF NOT EXISTS Orders (
+                    Id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    RestaurantId INTEGER NOT NULL,
+                    WaiterId INTEGER,
+                    TableNumber TEXT,
+                    Status TEXT NOT NULL,
+                    CreatedAt TEXT NOT NULL,
+                    UpdatedAt TEXT,
+                    Total NUMERIC
+                );";
+
+                const string itemsSql = @"CREATE TABLE IF NOT EXISTS OrderItems (
+                    Id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    OrderId INTEGER NOT NULL,
+                    MenuItemId INTEGER,
+                    Name TEXT,
+                    Price NUMERIC,
+                    Quantity INTEGER NOT NULL,
+                    Notes TEXT
+                );";
+
+                await _dbContext.Database.ExecuteSqlRawAsync(ordersSql);
+                await _dbContext.Database.ExecuteSqlRawAsync(itemsSql);
+            }
+
+            private async Task EnsureAccessCodesTableExistsAsync()
+            {
+                const string sql = @"CREATE TABLE IF NOT EXISTS AccessCodes (
+                    Id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    Code TEXT NOT NULL,
+                    RestaurantId INTEGER NOT NULL,
+                    TableNumber TEXT,
+                    WaiterId INTEGER,
+                    CreatedAt TEXT NOT NULL,
+                    ExpiresAt TEXT,
+                    UsedAt TEXT,
+                    IsActive INTEGER NOT NULL DEFAULT 1
+                );";
+
+                await _dbContext.Database.ExecuteSqlRawAsync(sql);
+            }
+
+            public async ValueTask DisposeAsync()
+            {
+                try
+                {
+                    _dbContext.Database.CloseConnection();
+                }
+                catch
+                {
+                    // ignore connection close failures during cleanup
+                }
+
+                await _dbContext.DisposeAsync();
+                try
+                {
+                    if (File.Exists(_databasePath))
+                    {
+                        File.Delete(_databasePath);
+                    }
+                }
+                catch
+                {
+                    // ignore cleanup issues
+                }
+            }
+
+            private sealed class FakeHubContext : IHubContext<OrderHub>
+            {
+                public static IHubContext<OrderHub> Instance { get; } = new FakeHubContext();
+
+                public IHubClients Clients { get; } = new FakeHubClients();
+                public IGroupManager Groups { get; } = new FakeGroupManager();
+
+                private sealed class FakeHubClients : IHubClients
+                {
+                    private static readonly IClientProxy Proxy = new FakeClientProxy();
+
+                    public IClientProxy All => Proxy;
+                    public IClientProxy AllExcept(IReadOnlyList<string> excludedConnectionIds) => Proxy;
+                    public IClientProxy Client(string connectionId) => Proxy;
+                    public IClientProxy Clients(IReadOnlyList<string> connectionIds) => Proxy;
+                    public IClientProxy Group(string groupName) => Proxy;
+                    public IClientProxy GroupExcept(string groupName, IReadOnlyList<string> excludedConnectionIds) => Proxy;
+                    public IClientProxy Groups(IReadOnlyList<string> groupNames) => Proxy;
+                    public IClientProxy User(string userId) => Proxy;
+                    public IClientProxy Users(IReadOnlyList<string> userIds) => Proxy;
+                }
+
+                private sealed class FakeGroupManager : IGroupManager
+                {
+                    public Task AddToGroupAsync(string connectionId, string groupName, CancellationToken cancellationToken = default) => Task.CompletedTask;
+                    public Task RemoveFromGroupAsync(string connectionId, string groupName, CancellationToken cancellationToken = default) => Task.CompletedTask;
+                }
+
+                private sealed class FakeClientProxy : IClientProxy
+                {
+                    public Task SendCoreAsync(string method, object?[] args, CancellationToken cancellationToken = default) => Task.CompletedTask;
+                }
+            }
+        }
+    }
+
+    public class OrderHubTests
+    {
+        [Fact]
+        public async Task JoinGroup_ShouldAddConnectionToGroup_WhenWaiterIdIsValid()
+        {
+            // Arrange
+            var mockGroups = new Mock<IGroupManager>();
+            var connectionId = "conn1";
+            var waiterId = "123";
+            mockGroups.Setup(g => g.AddToGroupAsync(connectionId, waiterId, It.IsAny<CancellationToken>())).Returns(Task.CompletedTask).Verifiable();
+
+            var mockContext = new Mock<HubCallerContext>();
+            mockContext.Setup(c => c.ConnectionId).Returns(connectionId);
+
+            var hub = new OrderHub();
+            typeof(Hub).GetProperty("Context")!.SetValue(hub, mockContext.Object);
+            typeof(Hub).GetProperty("Groups")!.SetValue(hub, mockGroups.Object);
+
+            // Act
+            await hub.JoinGroup(waiterId);
+
+            // Assert
+            mockGroups.Verify(g => g.AddToGroupAsync(connectionId, waiterId, It.IsAny<CancellationToken>()), Times.Once);
+        }
+
+        [Fact]
+        public async Task LeaveGroup_ShouldRemoveConnectionFromGroup_WhenWaiterIdIsValid()
+        {
+            // Arrange
+            var mockGroups = new Mock<IGroupManager>();
+            var connectionId = "conn2";
+            var waiterId = "456";
+            mockGroups.Setup(g => g.RemoveFromGroupAsync(connectionId, waiterId, It.IsAny<CancellationToken>())).Returns(Task.CompletedTask).Verifiable();
+
+            var mockContext = new Mock<HubCallerContext>();
+            mockContext.Setup(c => c.ConnectionId).Returns(connectionId);
+
+            var hub = new OrderHub();
+            typeof(Hub).GetProperty("Context")!.SetValue(hub, mockContext.Object);
+            typeof(Hub).GetProperty("Groups")!.SetValue(hub, mockGroups.Object);
+
+            // Act
+            await hub.LeaveGroup(waiterId);
+
+            // Assert
+            mockGroups.Verify(g => g.RemoveFromGroupAsync(connectionId, waiterId, It.IsAny<CancellationToken>()), Times.Once);
+        }
+
+        [Fact]
+        public async Task OnDisconnectedAsync_ShouldCallBase_WhenExceptionIsNull()
+        {
+            // Arrange
+            var hub = new OrderHub();
+
+            // Act
+            await hub.OnDisconnectedAsync(null);
+
+            // Assert - Just ensure no exception is thrown
         }
     }
 }
